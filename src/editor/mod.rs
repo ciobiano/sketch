@@ -249,6 +249,8 @@ pub struct Editor {
     pub active_page: usize,
     /// Page list or names changed (not tracked by undo history).
     pub meta_dirty: bool,
+    /// The project's design tokens (saved in the manifest; changes set `meta_dirty`).
+    pub tokens: crate::tokens::Tokens,
     /// Auto-layout frames not re-laid out while a child is being dragged inside them.
     pub layout_suspended: Vec<NodeId>,
     /// Pen tool in progress.
@@ -324,6 +326,7 @@ impl Editor {
             pages: vec![PageSlot::new(&name)],
             active_page: 0,
             meta_dirty: false,
+            tokens: crate::tokens::Tokens::default(),
             layout_suspended: Vec::new(),
             pen: None,
             path_edit: None,
