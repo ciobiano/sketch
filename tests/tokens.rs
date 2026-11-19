@@ -332,3 +332,247 @@ fn tokens_and_bindings_are_saved_with_the_project() {
         "created":0,"modified":0,"pages":[{"id":"p","name":"Page 1"}]}"#;
     assert!(Manifest::from_json(old).unwrap().tokens.is_empty());
 }
+
+// ------------------------------------------------------------------ inspector token picker
+
+use sketch_rs::mcp::tokens::{link, unlink};
+use sketch_rs::model::NodeKind;
+use sketch_rs::ui::inspector::apply_unlinking;
+
+/// A palette with type tokens, an auto layout card with plain values and a text layer in it.
+fn picker_setup(h: &mut exec::SessionHost) -> (NodeId, NodeId) {
+    palette(h);
+    call(
+        h,
+        "create_tokens",
+        json!({"tokens": [
+            {"type": "fontSize", "name": "--text-lg", "value": "24px"},
+            {"type": "fontWeight", "name": "--weight-bold", "value": 700},
+        ]}),
+    );
+    let ab = call(
+        h,
+        "create_artboard",
+        json!({"name": "Card", "styles": {"width": "320px", "height": "200px", "display": "flex",
+               "flexDirection": "column", "padding": "4px", "gap": "2px", "backgroundColor": "#ffffff"}}),
+    );
+    let r = call(
+        h,
+        "write_html",
+        json!({"targetNodeId": ab["id"], "mode": "insert-children",
+               "html": r#"<p layer-name="Title" style="font-size:14px; color:#000000">Hello</p>"#}),
+    );
+    (num(&ab["id"]), num(&r["createdNodeIds"][0]))
+}
+
+fn font_size(h: &exec::SessionHost, id: NodeId) -> f64 {
+    h.ed.doc.get(id).unwrap().kind.font_size().unwrap()
+}
+
+#[test]
+fn picking_a_token_links_the_property_and_applies_its_value() {
+    let mut h = host();
+    let (card, title) = picker_setup(&mut h);
+    let undo = h.ed.history.undo_len();
+
+    assert_eq!(
+        link(&mut h.ed, &[card], "backgroundColor", "--primary"),
+        Ok(1)
+    );
+    assert_eq!(fill(&h, card), hex("#3b82f6"));
+    let r = &h.ed.doc.get(card).unwrap().tokens["backgroundColor"];
+    assert_eq!(
+        (r.raw.as_str(), r.applied.as_str()),
+        ("var(--primary)", "#3b82f6")
+    );
+    // One undo step per pick, named after the token.
+    assert_eq!(h.ed.history.undo_len(), undo + 1);
+    assert_eq!(h.ed.history.undo_labels().last(), Some("Link --primary"));
+
+    link(&mut h.ed, &[card], "borderRadius", "--radius-md").unwrap();
+    link(&mut h.ed, &[card], "padding", "--space-2").unwrap();
+    link(&mut h.ed, &[card], "gap", "--space-2").unwrap();
+    let n = h.ed.doc.get(card).unwrap();
+    assert_eq!(n.style.corner_radius, 6.0);
+    assert_eq!(n.layout.unwrap().padding, [8.0; 4]);
+    assert_eq!(n.layout.unwrap().gap, 8.0);
+    // Auto layout followed: the title moved in with the padding.
+    assert_eq!(h.ed.doc.get(title).unwrap().rect.x, 8.0);
+
+    link(&mut h.ed, &[title], "color", "--primary").unwrap();
+    link(&mut h.ed, &[title], "fontSize", "--text-lg").unwrap();
+    link(&mut h.ed, &[title], "fontWeight", "--weight-bold").unwrap();
+    let t = h.ed.doc.get(title).unwrap();
+    assert_eq!(fill(&h, title), hex("#3b82f6"));
+    assert_eq!(font_size(&h, title), 24.0);
+    assert!(t.text_style.bold);
+    assert_eq!(t.tokens.len(), 3);
+
+    // Undo takes back one pick at a time.
+    h.ed.undo();
+    assert!(!h.ed.doc.get(title).unwrap().text_style.bold);
+    assert!(
+        !h.ed
+            .doc
+            .get(title)
+            .unwrap()
+            .tokens
+            .contains_key("fontWeight")
+    );
+    assert_eq!(font_size(&h, title), 24.0);
+
+    // The wrong type, an unknown token, or a property the layer doesn't have.
+    assert!(link(&mut h.ed, &[card], "backgroundColor", "--space-2").is_err());
+    assert!(link(&mut h.ed, &[card], "backgroundColor", "--nope").is_err());
+    assert_eq!(link(&mut h.ed, &[card], "fontSize", "--text-lg"), Ok(0));
+    assert!(!h.ed.doc.get(card).unwrap().tokens.contains_key("fontSize"));
+    h.ed.doc.validate().unwrap();
+}
+
+#[test]
+fn unlinking_keeps_the_value_and_stops_following() {
+    let mut h = host();
+    let (card, _) = picker_setup(&mut h);
+    link(&mut h.ed, &[card], "backgroundColor", "--primary").unwrap();
+    let undo = h.ed.history.undo_len();
+
+    assert_eq!(unlink(&mut h.ed, &[card], "backgroundColor"), 1);
+    assert!(h.ed.doc.get(card).unwrap().tokens.is_empty());
+    assert_eq!(fill(&h, card), hex("#3b82f6"));
+    assert_eq!(h.ed.history.undo_len(), undo + 1);
+    // Nothing left to unlink: no empty undo step.
+    assert_eq!(unlink(&mut h.ed, &[card], "backgroundColor"), 0);
+    assert_eq!(h.ed.history.undo_len(), undo + 1);
+
+    let r = call(
+        &mut h,
+        "set_tokens",
+        json!({"tokens": [{"name": "--blue-500", "value": "#ef4444"}]}),
+    );
+    assert_eq!(r["layersUpdated"], 0, "{r}");
+    assert_eq!(fill(&h, card), hex("#3b82f6"));
+
+    // Undo brings the link back, and with it the token's current value on the next change.
+    h.ed.undo();
+    assert!(
+        h.ed.doc
+            .get(card)
+            .unwrap()
+            .tokens
+            .contains_key("backgroundColor")
+    );
+
+    // A link written by an agent with the shorthand unlinks the same way.
+    call(
+        &mut h,
+        "update_styles",
+        json!({"updates": [{"nodeIds": [format!("{}", card.0)], "styles": {"background": "var(--primary)"}}]}),
+    );
+    let n = h.ed.doc.get(card).unwrap();
+    assert!(n.tokens.contains_key("background"), "{:?}", n.tokens);
+    assert_eq!(unlink(&mut h.ed, &[card], "backgroundColor"), 1);
+    assert!(h.ed.doc.get(card).unwrap().tokens.is_empty());
+}
+
+#[test]
+fn editing_a_linked_field_by_hand_unlinks_it_right_away() {
+    let mut h = host();
+    let (card, title) = picker_setup(&mut h);
+    for (prop, name) in [
+        ("backgroundColor", "--primary"),
+        ("borderRadius", "--radius-md"),
+        ("padding", "--space-2"),
+        ("gap", "--space-2"),
+    ] {
+        link(&mut h.ed, &[card], prop, name).unwrap();
+    }
+
+    // The fill row's color button, as the inspector applies it.
+    apply_unlinking(&mut h.ed, "fills", &[card], &["background"], |n| {
+        n.style.fills = vec![Paint::solid(hex("#facc15"))]
+    });
+    let n = h.ed.doc.get(card).unwrap();
+    assert!(!n.tokens.contains_key("backgroundColor"));
+    assert!(n.tokens.contains_key("borderRadius"));
+
+    // One padding side typed by hand drops the whole padding link, not the gap.
+    apply_unlinking(&mut h.ed, "layout", &[card], &["padding"], |n| {
+        n.layout.as_mut().unwrap().padding[0] = 20.0
+    });
+    apply_unlinking(&mut h.ed, "radius", &[card], &["borderRadius"], |n| {
+        n.style.corner_radius = 2.0
+    });
+    let keys: Vec<_> = h.ed.doc.get(card).unwrap().tokens.keys().cloned().collect();
+    assert_eq!(keys, ["gap"]);
+
+    // Text: the Size field and color button go through `style_text`.
+    link(&mut h.ed, &[title], "color", "--primary").unwrap();
+    link(&mut h.ed, &[title], "fontSize", "--text-lg").unwrap();
+    h.ed.selection = vec![title];
+    h.ed.style_text("color", |s| s.color = Some(hex("#16a34a")));
+    let t = h.ed.doc.get(title).unwrap();
+    assert!(!t.tokens.contains_key("color"));
+    assert!(t.tokens.contains_key("fontSize"));
+    h.ed.style_text("font size", |s| s.size = Some(30.0));
+    assert!(h.ed.doc.get(title).unwrap().tokens.is_empty());
+
+    // The hand-set values stay when the tokens change.
+    call(
+        &mut h,
+        "set_tokens",
+        json!({"tokens": [
+            {"name": "--blue-500", "value": "#ef4444"},
+            {"name": "--space-2", "value": "12px"},
+            {"name": "--text-lg", "value": "40px"},
+        ]}),
+    );
+    assert_eq!(fill(&h, card), hex("#facc15"));
+    assert_eq!(fill(&h, title), hex("#16a34a"));
+    assert_eq!(font_size(&h, title), 30.0);
+    let l = h.ed.doc.get(card).unwrap().layout.unwrap();
+    assert_eq!(l.padding, [20.0, 8.0, 8.0, 8.0]);
+    assert_eq!(l.gap, 12.0);
+}
+
+#[test]
+fn token_changes_reach_picker_linked_layers() {
+    let mut h = host();
+    let (card, title) = picker_setup(&mut h);
+    link(&mut h.ed, &[card], "backgroundColor", "--primary").unwrap();
+    link(&mut h.ed, &[card], "padding", "--space-2").unwrap();
+    link(&mut h.ed, &[title], "fontSize", "--text-lg").unwrap();
+    let before = h.ed.doc.get(title).unwrap().rect.h;
+
+    let r = call(
+        &mut h,
+        "set_tokens",
+        json!({"tokens": [
+            {"name": "--blue-500", "value": "#ef4444"},
+            {"name": "--space-2", "value": "16px"},
+            {"name": "--text-lg", "value": "48px"},
+        ]}),
+    );
+    assert_eq!(r["layersUpdated"], 2, "{r}");
+    assert_eq!(fill(&h, card), hex("#ef4444"));
+    assert_eq!(
+        h.ed.doc.get(card).unwrap().layout.unwrap().padding,
+        [16.0; 4]
+    );
+    assert_eq!(font_size(&h, title), 48.0);
+    let t = h.ed.doc.get(title).unwrap();
+    assert!(matches!(t.kind, NodeKind::Text { .. }));
+    assert!(t.rect.h > before, "text grew with the font size");
+    assert_eq!(t.rect.x, 16.0);
+
+    // Renaming keeps the picker's link.
+    call(
+        &mut h,
+        "set_tokens",
+        json!({"tokens": [{"name": "--primary", "newName": "--brand"}]}),
+    );
+    assert_eq!(
+        h.ed.doc.get(card).unwrap().tokens["backgroundColor"].raw,
+        "var(--brand)"
+    );
+    h.ed.doc.validate().unwrap();
+}

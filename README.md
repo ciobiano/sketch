@@ -181,6 +181,12 @@ updates those layers on every page. Setting a property to a plain value unlinks 
 property changed by hand in the inspector stops following its token. `get_computed_styles` shows linked properties as `var(...)`. With
 nothing selected, the inspector's Tokens section lists the tokens by type and edits them.
 
+You can link a layer to a token by hand too. The fill color, corner radius, auto layout gap and
+padding, and a text layer's font size, color and weight each have a token button that lists the
+tokens of the matching type. A linked field shows the token's name instead of its value; its
+menu switches to another token or unlinks the field, which keeps the current value. Typing a new
+value into a linked field unlinks it. Each pick or unlink is one undo step.
+
 ## Tests
 
 ```sh
@@ -334,8 +340,10 @@ Known gaps), ⏳ planned in a later milestone, ❌ not planned.
   generation (Paper has them). Moving or duplicating layers between pages isn't
   supported. Remote `http(s)` images aren't fetched; pass a local path or a `data:` URI.
   CSS margin, grid, shadows and transforms are reported back as ignored styles.
-* **Design tokens**: only agents link layers to tokens (through `var()`); the inspector edits
-  tokens but can't apply one to a selected layer yet. Token edits aren't part of undo history.
+* **Design tokens**: the inspector's token picker covers fill color, corner radius, gap,
+  padding, font size, text color and font weight; agents can link any property through
+  `var()`. The picker offers a fill token only on a layer with one fill, and links padding on
+  all four sides at once. Token edits aren't part of undo history.
   Changing a token adds one undo step per page it touches, which undoes the layers but not the
   token.
 * **Linux file dialogs** need an XDG desktop portal. Without one, Save/Open dialogs return

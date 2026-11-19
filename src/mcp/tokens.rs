@@ -247,16 +247,31 @@ fn refresh_node(
             n.tokens.remove(k);
             continue;
         }
-        text_metrics |= matches!(
-            k.as_str(),
-            "fontSize" | "fontWeight" | "fontFamily" | "font" | "lineHeight" | "letterSpacing"
-        );
+        text_metrics |= is_text_metric(k);
         let refs = std::mem::take(&mut n.tokens);
         css::apply(&mut n, &[(k.clone(), new.clone())], &ctx);
         n.tokens = refs;
         n.tokens.insert(k.clone(), TokenRef { raw, applied: new });
     }
-    if n == orig {
+    store(tx, id, &orig, n, text_metrics)
+}
+
+fn is_text_metric(prop: &str) -> bool {
+    matches!(
+        prop,
+        "fontSize" | "fontWeight" | "fontFamily" | "font" | "lineHeight" | "letterSpacing"
+    )
+}
+
+/// Write `n` over `orig` and let sizes, text and auto layout follow. False if unchanged.
+fn store(
+    tx: &mut Tx,
+    id: NodeId,
+    orig: &crate::model::Node,
+    n: crate::model::Node,
+    text: bool,
+) -> bool {
+    if n == *orig {
         return false;
     }
     let (old, new) = (orig.rect, n.rect);
@@ -264,11 +279,117 @@ fn refresh_node(
     if (old.w - new.w).abs() > 1e-9 || (old.h - new.h).abs() > 1e-9 {
         crate::layout::resize_children(tx, id, old, new);
     }
-    if text_metrics {
+    if text {
         fit_text(tx, id, false);
     }
     relayout(tx, Some(id));
     true
+}
+
+/// The token type a picker offers for a layer property (camelCase CSS), if any.
+pub fn picker_type(prop: &str) -> Option<TokenType> {
+    Some(match prop {
+        "backgroundColor" | "color" => TokenType::Color,
+        "borderRadius" => TokenType::Radius,
+        "padding" | "gap" => TokenType::Spacing,
+        "fontSize" => TokenType::FontSize,
+        "fontWeight" => TokenType::FontWeight,
+        _ => return None,
+    })
+}
+
+/// `prop` means something on this layer, so a token link on it would show.
+fn takes(n: &crate::model::Node, prop: &str) -> bool {
+    use crate::model::NodeKind as K;
+    let text = matches!(n.kind, K::Text { .. });
+    match prop {
+        "backgroundColor" => !text,
+        "color" | "fontWeight" => text,
+        "fontSize" => text || matches!(n.kind, K::Sticky { .. }),
+        "borderRadius" => matches!(
+            n.kind,
+            K::Rect | K::Frame { .. } | K::Polygon { .. } | K::Star { .. }
+        ),
+        "padding" | "gap" => n.layout.is_some(),
+        _ => false,
+    }
+}
+
+/// Link `prop` on the layers `ids` (on the active page) to the token `name` and apply its
+/// value, as `update_styles` with `var(--name)` would. Layers the property doesn't apply to
+/// are skipped. One undo step. Returns the number of layers linked.
+pub fn link(ed: &mut Editor, ids: &[NodeId], prop: &str, name: &str) -> Result<usize, String> {
+    let t = ed
+        .tokens
+        .get(name)
+        .ok_or_else(|| format!("unknown token `{name}`"))?;
+    if picker_type(prop) != Some(t.kind) {
+        return Err(format!("`{name}` is a {} token", t.kind.as_str()));
+    }
+    ed.tokens.resolve(name)?;
+    let _scope = tokens::scope(&ed.tokens);
+    let page_id = ed.pages[ed.active_page].id.clone();
+    let raw = format!("var({name})");
+    ed.begin(&format!("Link {name}"));
+    let linked = {
+        let mut tx = ed.tx();
+        let mut linked = Vec::new();
+        for &id in ids {
+            let Some(orig) = tx.doc().get(id).cloned() else {
+                continue;
+            };
+            if !takes(&orig, prop) {
+                continue;
+            }
+            let ctx = Parent::of(tx.doc(), &page_id, orig.parent).ctx();
+            let mut n = orig.clone();
+            css::apply(&mut n, &[(prop.to_string(), raw.clone())], &ctx);
+            // A whole-layer text style replaces the matching per-character ones.
+            for sp in &mut n.text_style.spans {
+                match prop {
+                    "color" => sp.color = None,
+                    "fontSize" => sp.size = None,
+                    "fontWeight" => sp.bold = None,
+                    _ => {}
+                }
+            }
+            n.text_style.normalize();
+            store(&mut tx, id, &orig, n, is_text_metric(prop));
+            linked.push(id);
+        }
+        linked
+    };
+    let field = match prop {
+        "backgroundColor" | "color" => "fills",
+        "borderRadius" => "radius",
+        "fontSize" | "fontWeight" => "font",
+        _ => "layout",
+    };
+    ed.mark_overrides(&linked, field);
+    ed.commit();
+    Ok(linked.len())
+}
+
+/// Remove the token link on `prop` from the layers `ids`, keeping their current values. One
+/// undo step. Returns the number of layers unlinked.
+pub fn unlink(ed: &mut Editor, ids: &[NodeId], prop: &str) -> usize {
+    let has = |ed: &Editor, id: &NodeId| {
+        ed.doc
+            .get(*id)
+            .is_some_and(|n| n.tokens.keys().any(|k| tokens::overlaps(k, prop)))
+    };
+    let ids: Vec<NodeId> = ids.iter().copied().filter(|id| has(ed, id)).collect();
+    if ids.is_empty() {
+        return 0;
+    }
+    ed.edit("Unlink token", |tx| {
+        for id in &ids {
+            if let Some(n) = tx.node_mut(*id) {
+                tokens::unlink(&mut n.tokens, prop);
+            }
+        }
+    });
+    ids.len()
 }
 
 /// `get_computed_styles` shows `var(...)` for token-bound properties.

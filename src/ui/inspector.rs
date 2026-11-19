@@ -13,6 +13,7 @@ use crate::model::{
 use crate::theme;
 use egui::{RichText, Ui};
 
+mod picker;
 mod tokens;
 
 const LABEL_W: f32 = 64.0;
@@ -34,6 +35,23 @@ pub fn apply(ed: &mut Editor, field: &str, ids: &[NodeId], f: impl Fn(&mut Node)
         ed.fit_text(*id);
     }
     ed.commit();
+}
+
+/// [`apply`], also dropping the design token links on `props` (camelCase CSS): a value set
+/// by hand replaces the token's.
+pub fn apply_unlinking(
+    ed: &mut Editor,
+    field: &str,
+    ids: &[NodeId],
+    props: &[&str],
+    f: impl Fn(&mut Node),
+) {
+    apply(ed, field, ids, |n| {
+        f(n);
+        for p in props {
+            crate::tokens::unlink(&mut n.tokens, p);
+        }
+    });
 }
 
 fn seal_on_release(ed: &mut Editor, r: &egui::Response) {
@@ -241,13 +259,15 @@ fn sticky_section(ui: &mut Ui, ed: &mut Editor, ids: &[NodeId], first: &Node) {
     ui.label(title_text("Sticky note"));
     let cur = first.style.fill().unwrap_or(STICKY_COLORS[0]);
     if let Some(c) = swatches(ui, cur) {
-        apply(ed, "fill", ids, |n| n.style.set_fill(Some(c)));
+        apply_unlinking(ed, "fill", ids, &["background"], |n| {
+            n.style.set_fill(Some(c))
+        });
         ed.sticky_color = c;
     }
     if let NodeKind::Sticky { font_size, .. } = first.kind {
         row(ui, "Font size", |ui| {
             if let Some(v) = num_field(ui, ed, "", font_size, 0.5, 8.0..=200.0, 70.0) {
-                apply(ed, "font size", ids, |n| {
+                apply_unlinking(ed, "font size", ids, &["fontSize"], |n| {
                     if let NodeKind::Sticky { font_size, .. } = &mut n.kind {
                         *font_size = v;
                     }
@@ -687,24 +707,28 @@ fn geometry(ui: &mut Ui, ed: &mut Editor, ids: &[NodeId], first: &Node) {
         let per_corner = first.style.radii.is_some();
         ui.horizontal(|ui| {
             if !per_corner {
-                if let Some(v) = num_field(
-                    ui,
-                    ed,
-                    "Radius  ",
-                    first.style.corner_radius,
-                    0.5,
-                    0.0..=1e4,
-                    92.0,
-                ) {
-                    apply(ed, "radius", ids, |n| n.style.corner_radius = v);
-                }
+                picker::field(ui, ed, ids, first, "borderRadius", 92.0, |ui, ed| {
+                    if let Some(v) = num_field(
+                        ui,
+                        ed,
+                        "Radius  ",
+                        first.style.corner_radius,
+                        0.5,
+                        0.0..=1e4,
+                        92.0,
+                    ) {
+                        apply_unlinking(ed, "radius", ids, &["borderRadius"], |n| {
+                            n.style.corner_radius = v
+                        });
+                    }
+                });
             } else {
                 let rr = first.style.corner_radii();
                 for (i, p) in ["TL", "TR", "BR", "BL"].iter().enumerate() {
                     if let Some(v) =
                         num_field(ui, ed, &format!("{p} "), rr[i], 0.5, 0.0..=1e4, 46.0)
                     {
-                        apply(ed, "radius", ids, |n| {
+                        apply_unlinking(ed, "radius", ids, &["borderRadius"], |n| {
                             let mut r = n.style.corner_radii();
                             r[i] = v;
                             n.style.radii = Some(r);
@@ -715,7 +739,7 @@ fn geometry(ui: &mut Ui, ed: &mut Editor, ids: &[NodeId], first: &Node) {
             if matches!(first.kind, NodeKind::Rect | NodeKind::Frame { .. })
                 && icon_btn(ui, theme::Icon::Corners, per_corner, "Independent corners")
             {
-                apply(ed, "radius", ids, |n| {
+                apply_unlinking(ed, "radius", ids, &["borderRadius"], |n| {
                     n.style.radii = if n.style.radii.is_some() {
                         None
                     } else {
@@ -860,6 +884,14 @@ fn auto_layout(ui: &mut Ui, ed: &mut Editor, ids: &[NodeId], first: &Node) {
             }
         });
     };
+    // Gap and padding can follow spacing tokens; a value typed by hand unlinks them.
+    let set_linked = |ed: &mut Editor, prop: &str, f: &dyn Fn(&mut AutoLayout)| {
+        apply_unlinking(ed, "layout", ids, &[prop], |n| {
+            if let Some(l) = &mut n.layout {
+                f(l);
+            }
+        });
+    };
     ui.horizontal(|ui| {
         if icon_btn(
             ui,
@@ -882,20 +914,25 @@ fn auto_layout(ui: &mut Ui, ed: &mut Editor, ids: &[NodeId], first: &Node) {
         }
         ui.add_space(6.0);
         ui.add_enabled_ui(!l.gap_auto, |ui| {
-            if let Some(v) = num_field(ui, ed, "Gap ", l.gap, 0.5, -1e4..=1e4, 70.0) {
-                set(ed, &|l| l.gap = v);
-            }
+            picker::field(ui, ed, ids, first, "gap", 70.0, |ui, ed| {
+                if let Some(v) = num_field(ui, ed, "Gap ", l.gap, 0.5, -1e4..=1e4, 70.0) {
+                    set_linked(ed, "gap", &|l| l.gap = v);
+                }
+            });
         });
         if icon_btn(ui, theme::Icon::SpaceBetween, l.gap_auto, "Space between") {
             set(ed, &|l| l.gap_auto = !l.gap_auto);
         }
     });
     ui.horizontal(|ui| {
-        for (i, p) in ["T ", "R ", "B ", "L "].iter().enumerate() {
-            if let Some(v) = num_field(ui, ed, p, l.padding[i], 0.5, 0.0..=1e4, 44.0) {
-                set(ed, &|l| l.padding[i] = v);
+        let w = 4.0 * 44.0 + 3.0 * ui.spacing().item_spacing.x;
+        picker::field(ui, ed, ids, first, "padding", w, |ui, ed| {
+            for (i, p) in ["T ", "R ", "B ", "L "].iter().enumerate() {
+                if let Some(v) = num_field(ui, ed, p, l.padding[i], 0.5, 0.0..=1e4, 44.0) {
+                    set_linked(ed, "padding", &|l| l.padding[i] = v);
+                }
             }
-        }
+        });
     });
     let opts = [
         (Align::Start, "Start"),
@@ -933,17 +970,24 @@ fn text_section(ui: &mut Ui, ed: &mut Editor, ids: &[NodeId], first: &Node) {
     let cs = ed.current_char_style();
     ui.horizontal(|ui| {
         let size = cs.map_or(*font_size, |c| c.size);
-        if let Some(v) = num_field(ui, ed, "Size ", size, 0.5, 1.0..=1000.0, 80.0) {
-            ed.style_text("font size", |s| s.size = Some(v));
-        }
+        picker::field(ui, ed, ids, first, "fontSize", 80.0, |ui, ed| {
+            if let Some(v) = num_field(ui, ed, "Size ", size, 0.5, 1.0..=1000.0, 80.0) {
+                ed.style_text("font size", |s| s.size = Some(v));
+            }
+        });
         let c = cs.map(|c| c.color).unwrap_or(Color::INK);
-        if let Some(nc) = color_button(ui, ed, c) {
-            ed.style_text("color", |s| s.color = Some(nc));
-        }
-        ui.add_space(4.0);
-        if icon_toggle(ui, "B", cs.is_some_and(|c| c.bold), "Bold (⌘B)") {
-            ed.toggle_bold();
-        }
+        picker::field(ui, ed, ids, first, "color", 72.0, |ui, ed| {
+            if let Some(nc) = color_button(ui, ed, c) {
+                ed.style_text("color", |s| s.color = Some(nc));
+            }
+        });
+    });
+    ui.horizontal(|ui| {
+        picker::field(ui, ed, ids, first, "fontWeight", 72.0, |ui, ed| {
+            if icon_toggle(ui, "B", cs.is_some_and(|c| c.bold), "Bold (⌘B)") {
+                ed.toggle_bold();
+            }
+        });
         if icon_toggle(ui, "I", cs.is_some_and(|c| c.italic), "Italic (⌘I)") {
             ed.toggle_italic();
         }
@@ -1020,20 +1064,23 @@ fn fills(ui: &mut Ui, ed: &mut Editor, ids: &[NodeId], first: &Node) {
                 let c = fills
                     .last()
                     .map_or(Color::rgb(0xd9, 0xd9, 0xd9), |p| p.preview_color());
-                apply(ed, "fills", ids, |n| n.style.fills.push(Paint::solid(c)));
+                apply_unlinking(ed, "fills", ids, &["background"], |n| {
+                    n.style.fills.push(Paint::solid(c))
+                });
             }
         });
     });
     // Top fill first, as in Figma.
     for i in (0..fills.len()).rev() {
         let p = fills[i].clone();
-        ui.push_id(i, |ui| fill_row(ui, ed, ids, i, &p));
+        ui.push_id(i, |ui| fill_row(ui, ed, ids, first, i, &p));
     }
 }
 
-fn fill_row(ui: &mut Ui, ed: &mut Editor, ids: &[NodeId], i: usize, p: &Paint) {
+fn fill_row(ui: &mut Ui, ed: &mut Editor, ids: &[NodeId], first: &Node, i: usize, p: &Paint) {
+    // Any fill edit by hand replaces a color token link (`backgroundColor`, `background`).
     let set = |ed: &mut Editor, np: Paint| {
-        apply(ed, "fills", ids, |n| {
+        apply_unlinking(ed, "fills", ids, &["background"], |n| {
             if let Some(slot) = n.style.fills.get_mut(i) {
                 *slot = np.clone();
             }
@@ -1064,10 +1111,18 @@ fn fill_row(ui: &mut Ui, ed: &mut Editor, ids: &[NodeId], i: usize, p: &Paint) {
         }
         match p {
             Paint::Solid { color } => {
-                if let Some(c) = color_button(ui, ed, *color) {
-                    set(ed, Paint::solid(c));
+                let solid = |ui: &mut Ui, ed: &mut Editor| {
+                    if let Some(c) = color_button(ui, ed, *color) {
+                        set(ed, Paint::solid(c));
+                    }
+                    ui.label(RichText::new(color.to_hex()).monospace().weak());
+                };
+                // A color token sets the whole fill list, so it is offered for a single fill.
+                if first.style.fills.len() == 1 {
+                    picker::field(ui, ed, ids, first, "backgroundColor", 110.0, solid);
+                } else {
+                    solid(ui, ed);
                 }
-                ui.label(RichText::new(color.to_hex()).monospace().weak());
             }
             Paint::Image {
                 mode,
@@ -1098,7 +1153,7 @@ fn fill_row(ui: &mut Ui, ed: &mut Editor, ids: &[NodeId], i: usize, p: &Paint) {
         }
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             if ui.small_button("−").on_hover_text("Remove fill").clicked() {
-                apply(ed, "fills", ids, |n| {
+                apply_unlinking(ed, "fills", ids, &["background"], |n| {
                     if i < n.style.fills.len() {
                         n.style.fills.remove(i);
                     }
