@@ -19,6 +19,8 @@ switching the user's view. Node ids are opaque strings; never show them to the u
 a row, a card) so the user sees progress. Inline styles only; flexbox (display:flex, gap, \
 padding, align-items, justify-content) is the layout model; no margin, grid or tables.
 - Text uses Inter (regular, bold, italic). Use px for font sizes.
+- Design tokens: get_tokens lists the project's tokens; use them in styles as \
+var(--name) so layers follow later token changes. create_tokens / set_tokens manage them.
 - Edit with update_styles, set_text_content, rename_nodes, duplicate_nodes, move_nodes, \
 delete_nodes. Whiteboard shapes, sticky notes and arrows: create_shape. Hand-drawn style: \
 update_styles with {\"sketch\": true, \"roughness\": 1, \"fillStyle\": \"hachure\"}.
@@ -41,6 +43,10 @@ fn styles_schema(desc: &str) -> Value {
         "additionalProperties": {"anyOf": [{"type": "string"}, {"type": "number"}, {"type": "boolean"}]},
         "description": desc,
     })
+}
+
+fn token_types() -> Vec<&'static str> {
+    crate::tokens::TokenType::ALL.map(|t| t.as_str()).to_vec()
 }
 
 fn tool(name: &str, desc: &str, props: Value, required: &[&str], read_only: bool) -> Value {
@@ -130,7 +136,8 @@ pub fn definitions() -> Vec<Value> {
             "get_basic_info",
             "Essential context about the open project: project name, the page, node count, \
              artboards (top-level frames) with ids, sizes and world positions, other top-level \
-             layers, fonts, and `pages` with the active one marked isActive.\n\
+             layers, fonts, the project's design tokens (name, type, value), and `pages` with \
+             the active one marked isActive.\n\
              - worldX/worldY are world positions; x/y are relative to the parent.\n\
              - Pass pageId to inspect another page without switching the user's view.",
             json!({"pageId": page_id()}),
@@ -272,6 +279,61 @@ pub fn definitions() -> Vec<Value> {
                 "path": {"type": "string", "description": "Output file (default: Downloads/<project>.pdf)."},
             }),
             &["nodeIds"],
+            false,
+        ),
+        // ------------------------------------------------------------ design tokens
+        tool(
+            "get_tokens",
+            "List the project's design tokens (colors, spacing, typography, etc).",
+            json!({
+                "types": {"type": "array", "items": {"type": "string", "enum": token_types()}, "description": "Filter by design token type(s). Omit to include all types."},
+                "namePattern": {"type": "string", "description": "Only tokens whose full name matches this pattern, ignoring case. `*` matches any run of characters, e.g. \"--color-*\" or \"*brand*\"."},
+                "format": {"type": "string", "enum": ["json", "css", "tailwind"], "description": "json (default): a list of tokens with type, value and description. css: a `:root { }` block of custom properties. tailwind: a Tailwind v4 `@theme { }` block, with names moved into Tailwind's namespaces (--color-*, --spacing-*, --text-*, ...)."},
+            }),
+            &[],
+            true,
+        ),
+        tool(
+            "create_tokens",
+            "Create one or more design tokens. Each entry needs `type`, `name` and `value`. Use \
+             `var(--other-token)` as the value to alias another token. Returns one \
+             {name, result: \"created\"} (or {result: \"error\", message}) per entry.\n\
+             Use tokens in styles as `var(--name)` (write_html, update_styles, create_artboard); \
+             the layer then follows later changes to the token. Order matters: define colors \
+             neutral first, then primary, secondary and accent; other types smallest value \
+             first. Prefer reusing tokens before creating new ones.",
+            json!({"tokens": {"type": "array", "minItems": 1, "description": "Design tokens to create.", "items": {
+                "type": "object",
+                "properties": {
+                    "type": {"type": "string", "enum": token_types(), "description": "Design token type."},
+                    "name": {"type": "string", "pattern": "^--[a-zA-Z0-9_-]+$", "description": "CSS custom property name, e.g. \"--color-primary\"."},
+                    "value": {"type": ["string", "number"], "description": "Colors as CSS color strings (\"#ff0000\", \"oklch(...)\"); sizes as px strings (\"8px\"); fontWeight as a number (400); lineHeight/letterSpacing as a string or number; opacity 0–1 or a percent string. Alias another token with \"var(--color-red)\"."},
+                    "description": {"type": "string", "maxLength": 1024, "description": "Optional note on what the token is for."},
+                },
+                "required": ["type", "name", "value"],
+            }}}),
+            &["tokens"],
+            false,
+        ),
+        tool(
+            "set_tokens",
+            "Update or delete design tokens by full CSS variable name, in order. Set `newName` to \
+             rename (aliases and layers that use the token follow), `value` to change the value, \
+             `description` to change the note (empty string clears it), or `delete: true` to \
+             delete it (layers keep their current values). Layers that use a changed token \
+             update on every page. Returns one result per entry; errors are reported per entry.",
+            json!({"tokens": {"type": "array", "minItems": 1, "description": "Design tokens to update or delete, applied in order.", "items": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string", "pattern": "^--[a-zA-Z0-9_-]+$", "description": "The token's full CSS custom property name."},
+                    "newName": {"type": "string", "pattern": "^--[a-zA-Z0-9_-]+$", "description": "Optional new name."},
+                    "value": {"type": ["string", "number"], "description": "Optional new value. Use var(--other-token) to alias."},
+                    "description": {"type": "string", "maxLength": 1024, "description": "Optional new description; empty string clears it."},
+                    "delete": {"type": "boolean", "description": "Optional. If true, deletes the token."},
+                },
+                "required": ["name"],
+            }}}),
+            &["tokens"],
             false,
         ),
         // ------------------------------------------------------------ writing

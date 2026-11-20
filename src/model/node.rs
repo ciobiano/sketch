@@ -5,6 +5,7 @@ use super::paint::{
 };
 use crate::geom::{Rect, V2};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use std::collections::BTreeMap;
 use std::fmt;
 
 #[derive(
@@ -396,6 +397,9 @@ pub struct Node {
     /// Instance link (instance roots and every node inside an instance).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub instance: Option<InstanceLink>,
+    /// Properties that use design tokens, by camelCase CSS property (MCP styles with `var()`).
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub tokens: BTreeMap<String, crate::tokens::TokenRef>,
 }
 
 /// One anchor of a vector path, with optional bezier handles (node-local, absolute).
@@ -472,6 +476,7 @@ impl Node {
             layout_child: LayoutChild::default(),
             component: false,
             instance: None,
+            tokens: BTreeMap::new(),
         }
     }
 

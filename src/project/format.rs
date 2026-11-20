@@ -7,6 +7,7 @@
 
 use crate::geom::Camera;
 use crate::model::{Document, Node, NodeId};
+use crate::tokens::Tokens;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::collections::HashMap;
@@ -77,6 +78,9 @@ pub struct Manifest {
     pub pages: Vec<PageRef>,
     #[serde(default)]
     pub active_page: Option<String>,
+    /// Design tokens shared by every page.
+    #[serde(default, skip_serializing_if = "Tokens::is_empty")]
+    pub tokens: Tokens,
 }
 
 impl Manifest {
@@ -95,6 +99,7 @@ impl Manifest {
             modified: now,
             active_page: Some(page.id.clone()),
             pages: vec![page],
+            tokens: Tokens::default(),
         }
     }
 

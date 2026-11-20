@@ -612,6 +612,10 @@ fn rough_mut(n: &mut Node) -> &mut Rough {
 /// text and sticky nodes; box properties to everything else.
 pub fn apply(n: &mut Node, styles: &[(String, String)], ctx: &Context) -> Applied {
     let mut a = Applied::default();
+    // Design tokens: `var(--name)` resolves against the active token scope, and the node
+    // remembers the original text so it can follow later changes to the token.
+    let resolved = crate::tokens::bind(&mut n.tokens, styles, &mut a.ignored);
+    let styles = resolved.as_slice();
     // Font size first: `em` values elsewhere depend on it.
     if let Some((_, v)) = styles.iter().rev().find(|(k, _)| k == "fontSize") {
         let cur = n.kind.font_size().unwrap_or(16.0);
@@ -1100,6 +1104,8 @@ pub fn apply(n: &mut Node, styles: &[(String, String)], ctx: &Context) -> Applie
             a.ignored.push(k.clone());
         }
     }
+    // A token reference on a property Sketch can't use would never have an effect.
+    n.tokens.retain(|k, _| !a.ignored.contains(k));
     a
 }
 

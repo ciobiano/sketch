@@ -255,6 +255,8 @@ pub fn call(host: &mut dyn Host, name: &str, args: &Value) -> ToolResult {
             check_file(host, &a)?;
             let ed = host.editor();
             ed.commit_pending();
+            // Styles in this call resolve `var(--token)` against the project's tokens.
+            let _tokens = crate::tokens::scope(&ed.tokens);
             // The first content on the page the user is looking at is brought into view.
             let was_empty = ed.doc.root.is_empty();
             let r = match name {
@@ -268,6 +270,9 @@ pub fn call(host: &mut dyn Host, name: &str, args: &Value) -> ToolResult {
                 "get_screenshot" => screenshot(host, &a),
                 "get_jsx" => jsx(host, &a),
                 "get_computed_styles" => computed_styles(ed, &a),
+                "get_tokens" => super::tokens::get_tokens(ed, a.0),
+                "create_tokens" => super::tokens::create_tokens(ed, a.0),
+                "set_tokens" => super::tokens::set_tokens(ed, a.0),
                 "get_fill_image" => fill_image(ed, &a),
                 "find_nodes" => find_nodes(ed, &a),
                 "export" => export(host, &a),
@@ -497,6 +502,7 @@ fn basic_info(host: &mut dyn Host, a: &Args) -> ToolResult {
         "artboards": artboards,
         "otherTopLevelLayers": others,
         "fontFamilies": ["Inter"],
+        "tokens": super::tokens::summary(ed),
         "selectionCount": if page == ed.active_page { ed.selection.len() } else { 0 },
         "nodeIdFormat": "\"<page>:<n>\", e.g. \"".to_string() + &node_key(ed, page, NodeId(1)) + "\"",
     }))
@@ -690,14 +696,9 @@ fn computed_styles(ed: &mut Editor, a: &Args) -> ToolResult {
         let (page, id) = resolve(ed, &k, def)?;
         let doc = ed.page_doc(page);
         let n = doc.get(id).unwrap();
-        out.insert(
-            node_key(ed, page, id),
-            Value::Object(css::computed(
-                n,
-                parent_layout(doc, n).as_ref(),
-                n.parent.is_none(),
-            )),
-        );
+        let mut styles = css::computed(n, parent_layout(doc, n).as_ref(), n.parent.is_none());
+        super::tokens::annotate(n, &mut styles);
+        out.insert(node_key(ed, page, id), Value::Object(styles));
     }
     text(Value::Object(out))
 }
@@ -1172,7 +1173,7 @@ fn remember_stretch(page_id: &str, id: NodeId, styles: &Styles) {
 }
 
 /// Recompute a text node's box from its content (inside a transaction).
-fn fit_text(tx: &mut Tx, id: NodeId, keep_height: bool) {
+pub(super) fn fit_text(tx: &mut Tx, id: NodeId, keep_height: bool) {
     let Some(n) = tx.doc().get(id) else { return };
     let NodeKind::Text { auto_width, .. } = n.kind else {
         return;
@@ -1195,7 +1196,7 @@ fn fit_text(tx: &mut Tx, id: NodeId, keep_height: bool) {
 
 /// Lay out the outermost auto-layout frame around `id` until it settles (hug sizes depend on
 /// wrapped text heights, which depend on fill widths).
-fn relayout(tx: &mut Tx, id: Option<NodeId>) {
+pub(super) fn relayout(tx: &mut Tx, id: Option<NodeId>) {
     let Some(mut top) = id.filter(|i| tx.doc().get(*i).is_some()) else {
         return;
     };
@@ -1218,7 +1219,7 @@ fn relayout(tx: &mut Tx, id: Option<NodeId>) {
 
 /// Where new content goes and how it sizes there.
 #[derive(Clone)]
-struct Parent {
+pub(super) struct Parent {
     id: Option<NodeId>,
     layout: Option<AutoLayout>,
     size: Option<(f64, f64)>,
@@ -1229,7 +1230,7 @@ struct Parent {
 }
 
 impl Parent {
-    fn of(doc: &Document, page_id: &str, id: Option<NodeId>) -> Parent {
+    pub(super) fn of(doc: &Document, page_id: &str, id: Option<NodeId>) -> Parent {
         match id.and_then(|i| doc.get(i)) {
             None => Parent {
                 id: None,
@@ -1250,7 +1251,7 @@ impl Parent {
             },
         }
     }
-    fn ctx(&self) -> Context {
+    pub(super) fn ctx(&self) -> Context {
         Context {
             parent_layout: self.layout,
             parent_size: self.size,

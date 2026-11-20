@@ -32,7 +32,7 @@ Paper. No original Paper code or assets are included in this repository.
 Sketch opens on a **home screen** of your projects (recents grid with thumbnails, New, Import,
 and Rename / Duplicate / Move to Trash from each card's ⋯ menu or right-click; restore from
 Trash). Each project is a plain folder in `~/Documents/sketch-rs/<name>/` holding `project.json`
-and one JSON file per page in `pages/`. Work is autosaved about a second after each change with
+(with the project's design tokens) and one JSON file per page in `pages/`. Work is autosaved about a second after each change with
 crash-safe atomic writes; files are versioned and older versions migrate on load. Set
 `SKETCH_RS_HOME` to use another folder.
 
@@ -160,6 +160,7 @@ written for Paper work here too.
 | Read | `get_basic_info`, `get_selection`, `get_node_info`, `get_children`, `get_tree_summary`, `get_computed_styles`, `get_jsx`, `find_nodes`, `get_fill_image`, `get_font_family_info`, `get_guide` |
 | See | `get_screenshot` (PNG image content of a node or the page), `export` (PNG/SVG/PDF files), `export_combined_pdf` |
 | Write | `create_artboard`, `write_html`, `update_styles`, `set_text_content`, `rename_nodes`, `duplicate_nodes`, `move_nodes`, `delete_nodes`, `finish_working_on_nodes` (saves) |
+| Design tokens | `get_tokens` (JSON, CSS `:root` or Tailwind v4 `@theme`), `create_tokens`, `set_tokens` |
 | Sketch extras | `create_shape` (rectangles, ellipses, diamonds, stars, stickies, text, lines, arrows bound to shapes), `select_nodes`, `undo`, `redo` |
 
 `write_html` takes HTML with inline styles: flexbox (`display:flex`, direction, gap, padding,
@@ -170,6 +171,15 @@ borders, radii, opacity and blend modes; `<img>` takes local paths or `data:` UR
 is imported as vectors. `update_styles` takes the same CSS as JSON, plus the hand-drawn keys
 `sketch`, `roughness`, `fillStyle`, `strokeStyle`. Node ids look like `3fa9c1:14` (page and
 node); `pageId` lets an agent work on another page without switching the user's view.
+
+**Design tokens** are named values saved with the project: colors, spacing, radii, font sizes
+and weights, line heights, letter spacing, opacity, breakpoints and container widths. A token
+can alias another (`--primary: var(--blue-500)`). Styles passed to `write_html`,
+`update_styles` and `create_artboard` can use `var(--name)` or `var(--name, fallback)`; the
+layer remembers which properties came from which tokens, and changing or renaming a token
+updates those layers on every page. Setting a property to a plain value unlinks it, and a
+property changed by hand in the inspector stops following its token. `get_computed_styles` shows linked properties as `var(...)`. With
+nothing selected, the inspector's Tokens section lists the tokens by type and edits them.
 
 ## Tests
 
@@ -283,6 +293,7 @@ Known gaps), ⏳ planned in a later milestone, ❌ not planned.
 | Import .excalidraw / SVG, copy-paste across projects | – | ✓ (SVG) | ✓ | ✅ .excalidraw scenes, .excalidrawlib libraries, SVG (paths, gradients, images, text), system clipboard between pages, projects and apps |
 | Freehand ink with pressure | – | (pencil) | ✓ | ✅ Smoothing, pressure, eraser |
 | MCP server for AI agents | ✓ | ✓ (Dev Mode) | ✓ (community) | ✅ Streamable HTTP in the app + stdio bridge; Paper-compatible tool names, `write_html`, screenshots, whiteboard shapes |
+| Design tokens / variables | ✓ | ✓ (variables) | – | ✅ Typed tokens with aliases, `var()` in agent styles, linked layers follow changes; JSON, CSS and Tailwind output |
 | Multiplayer, cloud sync, plugins | ✓ | ✓ | ✓ | ❌ local-first by design |
 
 ## Known gaps
@@ -319,10 +330,14 @@ Known gaps), ⏳ planned in a later milestone, ❌ not planned.
   inside shapes stays a separate text layer (except sticky notes), and fonts map to Inter.
   SVG patterns, filters, masks and clip paths are not imported.
 * **MCP**: one project is open at a time, so `fileId` must name the open project (call
-  `open_file` to switch; the user's window switches too). No design tokens, comments or AI
-  image generation (Paper has them). Moving or duplicating layers between pages isn't
+  `open_file` to switch; the user's window switches too). No comments or AI image
+  generation (Paper has them). Moving or duplicating layers between pages isn't
   supported. Remote `http(s)` images aren't fetched; pass a local path or a `data:` URI.
   CSS margin, grid, shadows and transforms are reported back as ignored styles.
+* **Design tokens**: only agents link layers to tokens (through `var()`); the inspector edits
+  tokens but can't apply one to a selected layer yet. Token edits aren't part of undo history.
+  Changing a token adds one undo step per page it touches, which undoes the layers but not the
+  token.
 * **Linux file dialogs** need an XDG desktop portal. Without one, Save/Open dialogs return
   nothing. The headless CLI is unaffected.
 

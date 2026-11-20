@@ -13,6 +13,8 @@ use crate::model::{
 use crate::theme;
 use egui::{RichText, Ui};
 
+mod tokens;
+
 const LABEL_W: f32 = 64.0;
 
 /// Apply a property edit as a coalesced transaction keyed by field + selection.
@@ -146,6 +148,7 @@ pub fn panel(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) {
             if ids.is_empty() {
                 nothing_selected(ui, ed);
                 separator(ui);
+                tokens::section(ui, ed);
                 export_section(ui, ed, st);
                 return;
             }
