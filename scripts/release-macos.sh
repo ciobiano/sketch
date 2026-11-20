@@ -27,17 +27,40 @@
 #   "$(scripts/fetch-sparkle.sh)/bin/generate_keys" --account sketch -x sketch-sparkle.key
 #   "$(scripts/fetch-sparkle.sh)/bin/generate_keys" --account sketch -f sketch-sparkle.key  # on a new Mac
 #
-#   SIGN_IDENTITY    signing identity (default: the first "Developer ID Application" in the keychain)
+# Releases go to the GitHub repository in SUFeedURL, so a fork that changes SUFeedURL and
+# SUPublicEDKey ships its own updates.
+#
+# Without a Developer ID certificate, SIGN_IDENTITY=- signs ad hoc. Gatekeeper rejects such a
+# build when it arrives quarantined, from a browser download say, so it suits the Mac that built
+# it. Copies installed there still update through Sparkle, which checks the EdDSA signature.
+# Ad hoc builds skip notarizing and the hardened runtime, which would refuse to load an ad hoc
+# signed Sparkle.framework.
+#
+#   SIGN_IDENTITY    signing identity (default: the first "Developer ID Application" in the keychain;
+#                    - signs ad hoc)
 #   NOTARY_PROFILE   notarytool keychain profile (default: sketch-notary)
 #   NOTARY_KEYCHAIN  keychain holding that profile (default: the login keychain)
 #   SPARKLE_ACCOUNT  login keychain account of the update signing key (default: sketch)
 #   NOTARIZE=0       sign and package without notarizing or writing the update feed
+#   APPCAST=0|1      whether to write the update feed (default: 1 when notarizing or signing ad hoc)
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
 identity=${SIGN_IDENTITY:-$(security find-identity -v -p codesigning | sed -n 's/.*"\(Developer ID Application: .*\)"$/\1/p' | head -1)}
 [ -n "$identity" ] || { echo "no Developer ID Application certificate in the keychain; set SIGN_IDENTITY" >&2; exit 1; }
-notarize=${NOTARIZE:-1}
+# Options for signing code, and for signing the disk image.
+if [ "$identity" = - ]; then
+  [ "${NOTARIZE:-0}" = 0 ] || { echo "ad hoc builds can't be notarized; unset NOTARIZE" >&2; exit 1; }
+  notarize=0
+  appcast=${APPCAST:-1}
+  code_opts=()
+  dmg_opts=()
+else
+  notarize=${NOTARIZE:-1}
+  appcast=${APPCAST:-$notarize}
+  code_opts=(--options runtime --timestamp)
+  dmg_opts=(--timestamp)
+fi
 notary=(--keychain-profile "${NOTARY_PROFILE:-sketch-notary}")
 [ -z "${NOTARY_KEYCHAIN:-}" ] || notary+=(--keychain "$NOTARY_KEYCHAIN")
 if [ "$notarize" = 1 ] && ! xcrun notarytool history "${notary[@]}" >/dev/null; then
@@ -56,14 +79,19 @@ done
 min_macos=$(plutil -extract LSMinimumSystemVersion raw "$plist")
 # Build for the oldest macOS the app supports rather than the compiler's default.
 export MACOSX_DEPLOYMENT_TARGET=$min_macos
-repo=https://github.com/michaelshimeles/sketch
+feed=$(plutil -extract SUFeedURL raw "$plist")
+repo=${feed%/releases/latest/download/appcast.xml}
+if [ "$repo" = "$feed" ]; then
+  echo "SUFeedURL in $plist isn't <GitHub repository>/releases/latest/download/appcast.xml" >&2
+  exit 1
+fi
 target_dir=$(cargo metadata --format-version 1 --no-deps | plutil -extract target_directory raw -o - -)
 out=$target_dir/universal-apple-darwin/release
 lock=$out.lock
 sparkle=$(scripts/fetch-sparkle.sh)
 sparkle_account=${SPARKLE_ACCOUNT:-sketch}
 sparkle_key=$(plutil -extract SUPublicEDKey raw "$plist")
-if [ "$notarize" = 1 ]; then
+if [ "$appcast" = 1 ]; then
   key=$("$sparkle/bin/generate_keys" --account "$sparkle_account" -p 2>/dev/null || true)
   if [ "$key" != "$sparkle_key" ]; then
     echo "the login keychain's update signing key (account $sparkle_account) is '$key', but the app trusts $sparkle_key." >&2
@@ -150,10 +178,10 @@ echo "signing as $identity"
 # Inside out: Sparkle's helpers, the framework and the MCP bridge before the app. The hardened
 # runtime loads Sparkle.framework only when it is signed by the app's own team.
 for code in "$framework/Versions/B/Autoupdate" "$framework/Versions/B/Updater.app" "$framework"; do
-  codesign --force --options runtime --timestamp --sign "$identity" "$code"
+  codesign --force ${code_opts[@]+"${code_opts[@]}"} --sign "$identity" "$code"
 done
-codesign --force --options runtime --timestamp --identifier com.heyfabrika.sketch.mcp --sign "$identity" "$app/Contents/MacOS/sketch-rs-mcp"
-codesign --force --options runtime --timestamp --sign "$identity" "$app"
+codesign --force ${code_opts[@]+"${code_opts[@]}"} --identifier com.heyfabrika.sketch.mcp --sign "$identity" "$app/Contents/MacOS/sketch-rs-mcp"
+codesign --force ${code_opts[@]+"${code_opts[@]}"} --sign "$identity" "$app"
 codesign --verify --deep --strict --verbose=2 "$app"
 if [ "$notarize" = 1 ]; then
   ditto -c -k --keepParent "$app" "$tmp/Sketch.zip"
@@ -173,7 +201,7 @@ hdiutil attach -nobrowse -noautoopen -mountpoint "$tmp/mnt" "$tmp/rw.dmg" >/dev/
 SetFile -a C "$tmp/mnt"
 hdiutil detach "$tmp/mnt" >/dev/null
 hdiutil convert "$tmp/rw.dmg" -format UDZO -ov -o "$dmg"
-codesign --force --timestamp --sign "$identity" "$dmg"
+codesign --force ${dmg_opts[@]+"${dmg_opts[@]}"} --sign "$identity" "$dmg"
 if [ "$notarize" = 1 ]; then
   notarize "$dmg" "$dmg"
   spctl --assess --type execute --verbose=2 "$app"
@@ -189,7 +217,7 @@ codesign --verify --deep --strict "$tmp/copied/Sketch.app"
 # ditto keeps the signature and the stapled ticket; plain zip does not.
 zip=$work/Sketch-$version.zip
 ditto -c -k --keepParent "$app" "$zip"
-[ "$notarize" = 1 ] || { finish; exit 0; }
+[ "$appcast" = 1 ] || { finish; exit 0; }
 
 # Installed copies read releases/latest/download/appcast.xml (SUFeedURL). generate_keys created
 # the key's keychain item, so it can export it without a prompt; the export lives in $tmp only
@@ -222,4 +250,4 @@ XML
 "$sparkle/bin/sign_update" --ed-key-file "$key_file" --verify "$appcast"
 rm -f "$key_file"
 finish
-echo "publish with: gh release create v$version $out/Sketch.dmg $out/$(basename "$zip") $out/appcast.xml"
+echo "publish with: gh release create v$version --repo ${repo#https://github.com/} $out/Sketch.dmg $out/$(basename "$zip") $out/appcast.xml"
