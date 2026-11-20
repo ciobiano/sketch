@@ -686,3 +686,63 @@ fn agent_design_screenshot() {
         ab_node.rect
     );
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn claude_channel_delivers_new_mentions_while_tools_work() {
+    use rmcp::model::CustomNotification;
+    use std::time::Duration;
+
+    struct Listener(tokio::sync::mpsc::UnboundedSender<CustomNotification>);
+    impl rmcp::ClientHandler for Listener {
+        async fn on_custom_notification(
+            &self,
+            n: CustomNotification,
+            _: rmcp::service::NotificationContext<rmcp::RoleClient>,
+        ) {
+            self.0.send(n).unwrap();
+        }
+    }
+
+    let (running, _worker) = spawn_app();
+    let post = |id: &str| {
+        running.mentions.publish(mcp::mentions::Mention {
+            file_id: Some("project".into()),
+            thread_id: "thread".into(),
+            message_id: id.into(),
+        })
+    };
+    post("old");
+    let mut cmd = tokio::process::Command::new(env!("CARGO_BIN_EXE_sketch-rs-mcp"));
+    cmd.arg("--claude-channel")
+        .env("SKETCH_RS_MCP_PORT", running.port.to_string());
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    let client = Listener(tx)
+        .serve(rmcp::transport::TokioChildProcess::new(cmd).unwrap())
+        .await
+        .unwrap();
+    let info = client.peer_info().unwrap();
+    assert!(
+        info.capabilities
+            .experimental
+            .as_ref()
+            .unwrap()
+            .contains_key("claude/channel")
+    );
+    assert!(info.protocol_version <= rmcp::model::ProtocolVersion::V_2025_11_25);
+    post("first");
+    post("reply");
+    draw_frame_with_text(&client).await;
+    for id in ["first", "reply"] {
+        let n = tokio::time::timeout(Duration::from_secs(4), rx.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(n.method, "notifications/claude/channel");
+        assert_eq!(
+            n.params.unwrap()["meta"],
+            json!({"fileId":"project","commentThreadId":"thread","messageId":id})
+        );
+    }
+    client.cancel().await.unwrap();
+    running.stop();
+}

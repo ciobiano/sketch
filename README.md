@@ -215,6 +215,27 @@ images too), and the agent replies, reacts and resolves under its own name, take
 MCP client (Claude Code shows as "Claude Code"). People who share a project folder each
 comment under their own name.
 
+### Send a mention to Claude Code
+
+Run Sketch and its stdio bridge from the same build. From the checkout, build both and register the bridge with Claude Code in this directory:
+
+```sh
+cargo build --bins
+claude mcp add --scope local sketch-mentions -- "$PWD/target/debug/sketch-rs-mcp" --claude-channel
+```
+
+With Sketch open, start a Claude Code terminal session in the same directory:
+
+```sh
+claude --dangerously-load-development-channels server:sketch-mentions
+```
+
+Claude Code asks you to confirm the custom development channel. If Sketch uses a custom port, set `SKETCH_RS_MCP_PORT` to the same value when starting Sketch and Claude Code.
+
+Post a new comment or reply containing `@Claude Code` or `@agent`. Each connected channel session receives the project, thread and message IDs and can read the feedback and reply in Sketch. You can mention Claude Code before its first reply. Opening a saved project or posting a reply through MCP sends no event. Comments posted while the channel is offline are still available through `list_comment_threads`.
+
+Claude documents the startup flag and organization settings in its [channels reference](https://code.claude.com/docs/en/channels-reference).
+
 ## Tests
 
 ```sh

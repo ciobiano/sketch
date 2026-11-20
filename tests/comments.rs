@@ -313,9 +313,38 @@ async fn replies_over_http_carry_the_clients_name() {
     };
     let v: Value = serde_json::from_str(&text.text).unwrap();
     assert_eq!(v["authorName"], "Test Agent");
+    // Sessionless clients send their identity on each request.
+    let body = json!({
+        "jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {
+            "name": "reply_to_comment_thread",
+            "arguments": {"commentThreadId": t, "text": "Checked"},
+            "_meta": {
+                "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+                "io.modelcontextprotocol/clientInfo": {"name": "claude-code", "version": "1"},
+                "io.modelcontextprotocol/clientCapabilities": {}
+            }
+        }
+    });
+    let response = reqwest::Client::new()
+        .post(running.url())
+        .header("content-type", "application/json")
+        .header("mcp-protocol-version", "2026-07-28")
+        .header("mcp-method", "tools/call")
+        .header("mcp-name", "reply_to_comment_thread")
+        .body(body.to_string())
+        .send()
+        .await
+        .unwrap();
+    let status = response.status();
+    let response_text = response.text().await.unwrap();
+    assert!(status.is_success(), "{status}: {response_text}");
     client.cancel().await.unwrap();
     running.stop();
     let comments = worker.join().unwrap();
+    assert_eq!(
+        comments.thread(&t).unwrap().messages[2].author,
+        "agent:claude-code"
+    );
     assert_eq!(
         comments.thread(&t).unwrap().messages[1].author,
         "agent:test-agent"

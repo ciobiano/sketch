@@ -21,6 +21,7 @@ use std::path::{Path, PathBuf};
 pub const ATTACHMENTS_DIR: &str = "attachments";
 /// Mention id that stands for any agent (`@agent`).
 pub const ANY_AGENT: &str = "agent";
+pub const CLAUDE_CODE: &str = "agent:claude-code";
 /// Reactions offered by the picker. Any emoji is accepted from the tools.
 pub const REACTIONS: [&str; 6] = ["👍", "❤", "🎉", "👀", "✅", "😄"];
 
@@ -293,7 +294,9 @@ impl Comments {
 
     /// The author's display name, or the id for an author this project doesn't know.
     pub fn name<'a>(&'a self, id: &'a str) -> &'a str {
-        self.author(id).map(|a| a.name.as_str()).unwrap_or(id)
+        self.author(id)
+            .map(|a| a.name.as_str())
+            .unwrap_or(if id == CLAUDE_CODE { "Claude Code" } else { id })
     }
 
     /// Record `a` (or their new name) in the project.
@@ -311,6 +314,9 @@ impl Comments {
             if a.id != me.id {
                 v.push(a.clone());
             }
+        }
+        if !v.iter().any(|a| a.id == CLAUDE_CODE) {
+            v.push(Author::agent(Some("claude-code")));
         }
         v.push(Author {
             id: ANY_AGENT.into(),
