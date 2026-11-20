@@ -31,6 +31,35 @@ pub struct Mention {
     /// Comments the person sent along with this one, in order.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub also: Vec<MentionRef>,
+    /// What each comment says and where it is (this one first, then `also`), so an agent can
+    /// start without fetching every thread. Apps before 0.1.4 send none.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub briefs: Vec<Brief>,
+}
+
+/// One comment as the agent first sees it.
+#[derive(Clone, Debug, Default, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Brief {
+    #[serde(rename = "commentThreadId")]
+    pub thread_id: String,
+    pub message_id: String,
+    pub author: String,
+    pub text: String,
+    pub page: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub node_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub node_name: Option<String>,
+    /// Up to three messages before this one, oldest first, as "Name: text".
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub earlier: Vec<String>,
+    /// The thread has messages older than `earlier`.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub older: bool,
+    /// Names of files attached anywhere in the thread.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub attachments: Vec<String>,
 }
 
 /// Another comment in the same send.

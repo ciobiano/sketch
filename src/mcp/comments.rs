@@ -106,6 +106,41 @@ fn node_json(ed: &Editor, page: usize, t: &Thread) -> Value {
     }
 }
 
+/// A message as a pushed notification carries it: who wrote it, what it says, where it is, and
+/// the replies just before it. `None` when the thread or message is gone.
+pub fn brief(ed: &Editor, thread: &str, message: &str) -> Option<super::mentions::Brief> {
+    let t = ed.comments.thread(thread)?;
+    let i = t.messages.iter().position(|m| m.id == message)?;
+    let page = page_of(ed, t)?;
+    let m = &t.messages[i];
+    let node = t.node_id().map(|id| {
+        (
+            node_key(ed, page, id),
+            ed.page_doc(page).get(id).map(|n| n.name.clone()),
+        )
+    });
+    let from = i.saturating_sub(3);
+    Some(super::mentions::Brief {
+        thread_id: t.id.clone(),
+        message_id: m.id.clone(),
+        author: ed.comments.name(&m.author).to_string(),
+        text: preview(&m.text, 1500),
+        page: ed.pages[page].name.clone(),
+        node_id: node.as_ref().map(|(k, _)| k.clone()),
+        node_name: node.and_then(|(_, n)| n),
+        earlier: t.messages[from..i]
+            .iter()
+            .map(|e| format!("{}: {}", ed.comments.name(&e.author), preview(&e.text, 280)))
+            .collect(),
+        older: from > 0,
+        attachments: t
+            .messages
+            .iter()
+            .flat_map(|m| m.attachments.iter().map(|a| a.name.clone()))
+            .collect(),
+    })
+}
+
 fn preview(text: &str, len: usize) -> String {
     let t: String = text.split_whitespace().collect::<Vec<_>>().join(" ");
     if t.chars().count() <= len {
@@ -405,7 +440,17 @@ pub fn reply(ed: &mut Editor, a: &Map<String, Value>) -> ToolResult {
     let id = thread_arg(ed, a)?.1.id.clone();
     let text = s(a, "text").ok_or("missing required string argument `text`")?;
     let by = agent();
-    let mid = ed.comments.reply(&id, &by, Draft::text(text), now_ms())?;
+    let resolve = match a.get("resolve") {
+        None | Some(Value::Null) => false,
+        Some(Value::Bool(b)) => *b,
+        Some(_) => return Err("`resolve` must be true or false".into()),
+    };
+    let now = now_ms();
+    let mid = ed.comments.reply(&id, &by, Draft::text(text), now)?;
+    // Replying and closing the thread in one call saves the agent a round trip.
+    if resolve {
+        ed.comments.set_status(&id, Status::Resolved, &by, now)?;
+    }
     ed.comments.clear_pending(&id);
     let t = ed.comments.thread(&id).expect("thread exists");
     let m = t.message(&mid).expect("message exists");
@@ -415,6 +460,7 @@ pub fn reply(ed: &mut Editor, a: &Map<String, Value>) -> ToolResult {
         "authorUserId": by.id,
         "authorName": by.name,
         "mentions": mentions(ed, m.mentions.iter()),
+        "status": t.status.as_str(),
     });
     written(ed);
     out(v)

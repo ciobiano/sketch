@@ -701,6 +701,7 @@ async fn claude_channel_delivers_new_mentions_while_tools_work() {
             thread_id: "thread".into(),
             message_id: id.into(),
             also: Vec::new(),
+            briefs: Vec::new(),
         })
     };
     post("old");
@@ -739,6 +740,7 @@ async fn claude_channel_delivers_new_mentions_while_tools_work() {
                     message_id: format!("{t}-m"),
                 })
                 .to_vec(),
+            briefs: Vec::new(),
         });
         let call = json!({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"get_basic_info","arguments":{}}});
         input.write_all(format!("{call}\n").as_bytes()).await.unwrap();
@@ -784,6 +786,7 @@ async fn named_listeners_deliver_to_their_own_host() {
             thread_id: "thread".into(),
             message_id: id.into(),
             also: Vec::new(),
+            briefs: Vec::new(),
         })
     };
     publish(&["agent"], "old");
@@ -847,4 +850,110 @@ async fn named_listeners_deliver_to_their_own_host() {
     }
     running.stop();
     std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// With no port set, the bridge finds open apps through their registry entries: tool calls go
+/// to the newest app, comments come from it, and entries of apps that quit are cleared.
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn bridge_finds_open_apps_without_a_port() {
+    use rmcp::ServiceExt;
+    use std::time::Duration;
+    let (running, _worker) = spawn_app();
+    let runtime = std::env::temp_dir().join(format!("sketch-running-{:016x}", fastrand::u64(..)));
+    std::fs::create_dir(&runtime).unwrap();
+    let entry = |port: u16, started: u64| {
+        json!({"port": port, "pid": 1, "name": "Sketch Dev", "started": started}).to_string()
+    };
+    std::fs::write(runtime.join("10.json"), entry(running.port, 1_000)).unwrap();
+    // A newer entry from an app that has quit: nothing answers on its port.
+    let dead = std::net::TcpListener::bind("127.0.0.1:0")
+        .unwrap()
+        .local_addr()
+        .unwrap()
+        .port();
+    std::fs::write(runtime.join("11.json"), entry(dead, 2_000)).unwrap();
+    let bridge = |args: &[&str]| {
+        let mut cmd = tokio::process::Command::new(env!("CARGO_BIN_EXE_sketch-rs-mcp"));
+        cmd.args(args)
+            .env("SKETCH_RS_RUNTIME_DIR", &runtime)
+            .env_remove("SKETCH_RS_MCP_PORT")
+            .env_remove("PAPER_RS_MCP_PORT")
+            .kill_on_drop(true);
+        cmd
+    };
+
+    let out = bridge(&["--url"]).output().await.unwrap();
+    let urls = String::from_utf8(out.stdout).unwrap();
+    assert_eq!(urls.lines().next(), Some(running.url().as_str()), "{urls}");
+    assert!(
+        !runtime.join("11.json").exists(),
+        "the stale entry is removed"
+    );
+
+    // Tool calls reach the registered app, not whatever answers on the default port.
+    let client =
+        ().serve(rmcp::transport::TokioChildProcess::new(bridge(&[])).unwrap())
+            .await
+            .unwrap();
+    let info = client
+        .call_tool(CallToolRequestParams::new("get_basic_info"))
+        .await
+        .unwrap();
+    let ContentBlock::Text(t) = &info.content[0] else {
+        panic!("{info:?}")
+    };
+    assert!(t.text.contains("MCP test"), "{}", t.text);
+    client.cancel().await.unwrap();
+
+    // So do comments.
+    let file = runtime.join("events");
+    let _listener = bridge(&[
+        "--deliver-mentions",
+        "Codex",
+        "--",
+        "sh",
+        "-c",
+        r#"cat >> "$1""#,
+        "h",
+    ])
+    .arg(&file)
+    .spawn()
+    .unwrap();
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while running.mentions.connected_agents().is_empty() {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("the listener finds the app");
+    running.mentions.publish(mcp::mentions::Mention {
+        recipients: vec!["agent:codex".into()],
+        file_id: None,
+        thread_id: "thread".into(),
+        message_id: "m1".into(),
+        also: Vec::new(),
+        briefs: vec![mcp::mentions::Brief {
+            thread_id: "thread".into(),
+            message_id: "m1".into(),
+            author: "Ann".into(),
+            text: "make it blue".into(),
+            page: "Page 1".into(),
+            ..Default::default()
+        }],
+    });
+    let body = tokio::time::timeout(Duration::from_secs(8), async {
+        loop {
+            let body = std::fs::read_to_string(&file).unwrap_or_default();
+            if body.ends_with('\n') {
+                break body;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("the comment arrives");
+    let event: Value = serde_json::from_str(body.lines().next().unwrap()).unwrap();
+    assert_eq!(event["mention"]["briefs"][0]["text"], "make it blue");
+    running.stop();
 }

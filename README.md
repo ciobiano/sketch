@@ -212,8 +212,9 @@ Agents work through the same threads. `list_comment_threads` finds open feedback
 (`mentionedUserId: "agent"` narrows it to threads that say @agent), `get_comment_thread`
 returns every message with its mentions, reactions and attachments (images come back as
 images too), and the agent replies, reacts and resolves under its own name, taken from its
-MCP client (Claude Code shows as "Claude Code"). People who share a project folder each
-comment under their own name.
+MCP client (Claude Code shows as "Claude Code"). `reply_to_comment_thread` takes
+`resolve: true` to reply and close the thread in one call. People who share a project folder
+each comment under their own name.
 
 ### Deliver mentions to a running agent
 
@@ -235,7 +236,7 @@ Build the app and bridge with `cargo build --bins`. For a Codex conversation in 
 target/debug/sketch-rs-mcp --deliver-mentions Codex -- t3 thread send "$T3CODE_THREAD_ID" -
 ```
 
-T3 sets `T3CODE_THREAD_ID` inside a thread. In a separate terminal, substitute the destination thread ID. The same command works for another T3 provider when you change the listener name and destination thread. Set `SKETCH_RS_MCP_PORT` to the running app's port when using a development build.
+T3 sets `T3CODE_THREAD_ID` inside a thread. In a separate terminal, substitute the destination thread ID. The same command works for another T3 provider when you change the listener name and destination thread. The listener finds every open Sketch app by itself, development builds included.
 
 For another host, replace the command after `--` with its message sender. Sketch runs it once per mention and writes one JSON event to its standard input. The event contains the local `mcpUrl` and a `mention` object with `commentThreadId`, `messageId`, and `fileId` when available. Configure the host to use that Sketch MCP endpoint. The host needs a way to submit a message to an existing conversation.
 
@@ -243,22 +244,21 @@ Posting a new comment or reply in Sketch triggers delivery. The listener starts 
 
 ### Use Claude Code's native channel
 
-Run Sketch and its stdio bridge from the same build. From the checkout, build both and register the bridge with Claude Code in this directory:
+The bridge ships inside the app and also serves Sketch's tools, so one entry covers both directions. Register it with Claude Code in the directory you work in:
 
 ```sh
-cargo build --bins
-claude mcp add --scope local sketch-mentions -- "$PWD/target/debug/sketch-rs-mcp" --claude-channel
+claude mcp add --scope local sketch-mentions -- /Applications/Sketch.app/Contents/MacOS/sketch-rs-mcp --claude-channel
 ```
 
-With Sketch open, start a Claude Code terminal session in the same directory:
+Then start a Claude Code terminal session there:
 
 ```sh
 claude --dangerously-load-development-channels server:sketch-mentions
 ```
 
-Claude Code asks you to confirm the custom development channel. If Sketch uses a custom port, set `SKETCH_RS_MCP_PORT` to the same value when starting Sketch and Claude Code.
+Claude Code asks you to confirm the custom development channel. No port setup is needed: every open Sketch app lists its MCP port for the bridge, so it finds the installed app, a dev build on another port, or both. Comments come from all of them; tool calls go to the newest one. Set `SKETCH_RS_MCP_PORT` in the bridge's environment only to pin it to one port.
 
-Post a new comment or reply containing `@Claude Code` or `@agent` (and press Send, unless the Comments tab is set to Right away). Each addressed session receives the project, thread and message IDs and can read the feedback and reply in Sketch. Comments sent together arrive as one message that lists every thread. You can mention Claude Code before its first reply. Opening a saved project or posting a reply through MCP sends no event. Comments posted while the channel is offline are still available through `list_comment_threads`.
+Post a new comment or reply containing `@Claude Code` or `@agent` (and press Send, unless the Comments tab is set to Right away). Each addressed session gets one message with what every comment says, who wrote it, and which layer and page it is on, so the agent starts on the design without looking each thread up. Attachments and older replies stay a `get_comment_thread` call away. You can mention Claude Code before its first reply. Opening a saved project or posting a reply through MCP sends no event. Comments posted while the channel is offline are still available through `list_comment_threads`.
 
 Claude documents the startup flag and organization settings in its [channels reference](https://code.claude.com/docs/en/channels-reference).
 

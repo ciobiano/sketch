@@ -27,18 +27,20 @@ USAGE:
   sketch-rs-mcp --claude-channel   also deliver new comment mentions to Claude Code
   sketch-rs-mcp --deliver-mentions NAME -- PROGRAM [ARGS...]
                          send each new mention as JSON to the program on stdin
-  sketch-rs-mcp --url     print the HTTP endpoint it relays to
+  sketch-rs-mcp --url     print the HTTP endpoints it would use, in order
   sketch-rs-mcp --help
 
-The app serves MCP itself at http://127.0.0.1:29980/mcp; set SKETCH_RS_MCP_PORT to change
-the port (in both the app's and the bridge's environment).
+Each open Sketch app serves MCP on its own port (29980 unless SKETCH_RS_MCP_PORT says
+otherwise) and lists itself for this bridge, so it finds the installed app and dev builds on
+other ports without setup. Tool calls go to the newest open app; comments are delivered from
+all of them. Set SKETCH_RS_MCP_PORT in the bridge's environment to use one port only.
 ";
 
 type Client = RunningService<RoleClient, ClientConfig>;
 
 struct Bridge {
-    url: String,
-    channel_cursor: Option<tokio::sync::OnceCell<Option<String>>>,
+    /// Starting cursors per open app, when this bridge also delivers comments to Claude Code.
+    channel_cursor: Option<tokio::sync::OnceCell<Vec<channel::Start>>>,
     listener_started: std::sync::Once,
     client: Mutex<Option<Client>>,
 }
@@ -46,18 +48,30 @@ struct Bridge {
 impl Bridge {
     /// Connect as `client`, the stdio client's identity, so the app knows which agent is
     /// calling (it signs that agent's comments with its name).
+    ///
+    /// Tools go to the newest open Sketch (a dev build you just started wins over the
+    /// installed app), or to `$SKETCH_RS_MCP_PORT` when it is set.
     async fn connect(&self, client: Option<Implementation>) -> Result<(), String> {
-        let transport = StreamableHttpClientTransport::from_uri(self.url.clone());
-        let mut config = ClientConfig::default();
-        if let Some(c) = client {
-            config.client_info = c;
-        }
-        let client = config
-            .serve(transport)
+        let ports = tokio::task::spawn_blocking(mcp::registry::targets)
             .await
-            .map_err(|e| format!("cannot reach Sketch at {}: {e}", self.url))?;
-        *self.client.lock().await = Some(client);
-        Ok(())
+            .unwrap_or_else(|_| vec![mcp::port()]);
+        let mut errors = Vec::new();
+        for port in ports {
+            let url = mcp::url(port);
+            let transport = StreamableHttpClientTransport::from_uri(url.clone());
+            let mut config = ClientConfig::default();
+            if let Some(c) = &client {
+                config.client_info = c.clone();
+            }
+            match config.serve(transport).await {
+                Ok(c) => {
+                    *self.client.lock().await = Some(c);
+                    return Ok(());
+                }
+                Err(e) => errors.push(format!("{url}: {e}")),
+            }
+        }
+        Err(format!("cannot reach Sketch ({})", errors.join("; ")))
     }
 
     async fn forward(
@@ -120,9 +134,7 @@ impl ServerHandler for Bridge {
         context.peer.set_peer_info(request.clone());
         let info = self.negotiate_initialize(&request)?;
         if let Some(cursor) = &self.channel_cursor {
-            cursor
-                .get_or_init(|| channel::initial_cursor(&self.url))
-                .await;
+            cursor.get_or_init(channel::initial_cursors).await;
         }
         Ok(info)
     }
@@ -130,10 +142,9 @@ impl ServerHandler for Bridge {
     async fn on_initialized(&self, context: NotificationContext<RoleServer>) {
         if let Some(cursor) = &self.channel_cursor {
             self.listener_started.call_once(|| {
-                tokio::spawn(channel::listen(
-                    self.url.clone(),
-                    channel::Destination::Claude(context.peer),
-                    cursor.get().cloned().flatten(),
+                tokio::spawn(channel::watch(
+                    std::sync::Arc::new(channel::Destination::Claude(context.peer)),
+                    cursor.get().cloned().unwrap_or_default(),
                 ));
             });
         }
@@ -177,13 +188,14 @@ fn main() -> std::process::ExitCode {
         .target(env_logger::Target::Stderr)
         .init();
     let args: Vec<String> = std::env::args().skip(1).collect();
-    let url = mcp::url(mcp::port());
     if matches!(args.first().map(String::as_str), Some("--help" | "-h")) {
         print!("{USAGE}");
         return std::process::ExitCode::SUCCESS;
     }
     if args.first().is_some_and(|a| a == "--url") {
-        println!("{url}");
+        for port in mcp::registry::targets() {
+            println!("{}", mcp::url(port));
+        }
         return std::process::ExitCode::SUCCESS;
     }
     let rt = match tokio::runtime::Builder::new_multi_thread()
@@ -208,19 +220,17 @@ fn main() -> std::process::ExitCode {
             }
             let mut argv = vec![program.clone()];
             argv.extend_from_slice(rest);
-            channel::listen(
-                url,
-                channel::Destination::Command {
+            channel::watch(
+                std::sync::Arc::new(channel::Destination::Command {
                     agent: name.clone(),
                     argv,
-                },
-                None,
+                }),
+                Vec::new(),
             )
             .await;
             return Ok(());
         }
         let bridge = Bridge {
-            url,
             channel_cursor: args
                 .iter()
                 .any(|a| a == "--claude-channel")

@@ -496,3 +496,74 @@ fn comment_tool_clicks_to_comment_and_drags_to_pan() {
     );
     assert_eq!(e.tool, Tool::Comment, "still commenting");
 }
+
+/// An agent can reply and close the thread in one call, and a pushed comment carries what
+/// the agent needs to start: the text, who wrote it, the layer and the replies before it.
+#[test]
+fn reply_can_resolve_and_briefs_carry_the_comment() {
+    let mut h = host();
+    let (button, t) = board(&mut h);
+    let me = h.ed.me.clone();
+    for (i, text) in ["first", "second", "third"].iter().enumerate() {
+        h.ed.comments
+            .reply(&t, &me, Draft::text(text), 2_000 + i as u64)
+            .unwrap();
+    }
+    let last =
+        h.ed.comments
+            .thread(&t)
+            .unwrap()
+            .messages
+            .last()
+            .unwrap()
+            .id
+            .clone();
+    let b = mcp::comments::brief(&h.ed, &t, &last).unwrap();
+    assert_eq!(b.author, "Ann");
+    assert_eq!(b.text, "third");
+    assert_eq!(b.page, "Page 1");
+    assert_eq!(b.node_name.as_deref(), Some("Button"));
+    assert!(
+        b.node_id
+            .as_deref()
+            .unwrap()
+            .ends_with(&button.0.to_string())
+    );
+    assert_eq!(
+        b.earlier,
+        [
+            "Ann: @agent make this button blue",
+            "Ann: first",
+            "Ann: second"
+        ]
+    );
+    assert!(!b.older);
+    assert!(mcp::comments::brief(&h.ed, &t, "nope").is_none());
+
+    let e = exec::call_as(
+        &mut h,
+        "reply_to_comment_thread",
+        &json!({"commentThreadId": t, "text": "Done", "resolve": "yes"}),
+        Some("claude-code"),
+    )
+    .unwrap_err();
+    assert!(e.contains("true or false"), "{e}");
+    let r = call(
+        &mut h,
+        "reply_to_comment_thread",
+        json!({"commentThreadId": t, "text": "Done, it is blue", "resolve": true}),
+    );
+    assert_eq!(r["status"], "resolved");
+    let th = h.ed.comments.thread(&t).unwrap();
+    assert_eq!(th.status, Status::Resolved);
+    assert_eq!(th.resolved_by.as_deref(), Some("agent:claude-code"));
+    let r = call(
+        &mut h,
+        "reply_to_comment_thread",
+        json!({"commentThreadId": t, "text": "One more thing?"}),
+    );
+    assert_eq!(
+        r["status"], "resolved",
+        "a plain reply leaves the status alone"
+    );
+}
