@@ -74,7 +74,11 @@ It uses Metal through wgpu. Shortcuts use ⌘, and trackpad pinch zooms.
 `scripts/release-macos.sh` builds the universal `Sketch.app` with `sketch-rs-mcp` inside, signs
 it with a Developer ID certificate, notarizes it and packages `Sketch.dmg`, plus the zip and
 signed `appcast.xml` that installed copies update from. The one-time credential setup is at the
-top of the script.
+top of the script. Releases go to the repository named in `SUFeedURL`.
+
+Without a Developer ID certificate, `SIGN_IDENTITY=- scripts/release-macos.sh` signs ad hoc and
+skips notarizing. Gatekeeper blocks that build on other Macs, but on the Mac that built it the
+installed copy still updates through Sparkle from each release you publish.
 
 ### Linux
 
