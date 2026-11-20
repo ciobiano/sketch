@@ -15,6 +15,7 @@ pub mod css;
 pub mod exec;
 pub mod html;
 pub mod mentions;
+pub mod registry;
 pub mod server;
 pub mod tokens;
 pub mod tools;

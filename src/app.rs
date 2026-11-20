@@ -49,6 +49,8 @@ pub struct App {
         std::sync::mpsc::Receiver<crate::mcp::Call>,
         crate::mcp::server::Running,
     )>,
+    /// This app's entry in the list of open apps that `sketch-rs-mcp` reads.
+    _mcp_entry: Option<crate::mcp::registry::Registration>,
 }
 
 /// Events delivered to the winit loop from other sources.
@@ -90,6 +92,7 @@ impl App {
             #[cfg(target_os = "macos")]
             menu: None,
             mcp: None,
+            _mcp_entry: None,
         };
         app.st.library.library = library;
         app.ed.clipboard_io = crate::io::clipboard::System::new()
@@ -526,6 +529,10 @@ impl App {
                     also,
                 } => {
                     if let Some((_, server)) = &self.mcp {
+                        let briefs = std::iter::once((&thread_id, &message_id))
+                            .chain(also.iter().map(|(t, m)| (t, m)))
+                            .filter_map(|(t, m)| crate::mcp::comments::brief(&self.ed, t, m))
+                            .collect();
                         server.mentions.publish(crate::mcp::mentions::Mention {
                             recipients,
                             file_id: self.session.project.as_ref().map(|p| p.manifest.id.clone()),
@@ -538,6 +545,7 @@ impl App {
                                     message_id,
                                 })
                                 .collect(),
+                            briefs,
                         });
                     }
                 }
@@ -1484,5 +1492,9 @@ pub fn run(start: Start) -> Result<(), String> {
     }
     let mut app = App::new(start, store);
     app.mcp = start_mcp(event_loop.create_proxy());
+    app._mcp_entry = app
+        .mcp
+        .as_ref()
+        .and_then(|(_, r)| crate::mcp::registry::register(r.port));
     event_loop.run_app(&mut app).map_err(|e| e.to_string())
 }

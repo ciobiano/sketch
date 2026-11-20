@@ -29,8 +29,8 @@ update_styles with {\"sketch\": true, \"roughness\": 1, \"fillStyle\": \"hachure
 clips set height: \"fit-content\" with update_styles.
 - Comments: people pin feedback to layers. list_comment_threads shows the open threads \
 (mentionedUserId: \"agent\" finds the ones addressed to agents); get_comment_thread reads one \
-in full. After fixing the design, say what you changed with reply_to_comment_thread and mark \
-the thread done with set_comment_thread_status.
+in full. After fixing the design, say what you changed with reply_to_comment_thread and pass \
+resolve: true to close the thread in the same call.
 - Call finish_working_on_nodes when done.";
 
 fn file_id() -> Value {
@@ -348,10 +348,13 @@ pub fn definitions() -> Vec<Value> {
         tool(
             "reply_to_comment_thread",
             "Reply in a comment thread, signed with your agent name. Say what you changed or ask \
-             a question. Write @Name to mention someone from list_comment_thread_authors.",
+             a question. Write @Name to mention someone from list_comment_thread_authors. Pass \
+             resolve: true when the reply finishes the request, to close the thread in the same \
+             call.",
             json!({
                 "commentThreadId": {"type": "string", "minLength": 1, "description": "Thread id from list_comment_threads."},
                 "text": {"type": "string", "minLength": 1, "description": "The reply."},
+                "resolve": {"type": "boolean", "description": "true marks the thread resolved after replying. Leave it out when you are asking a question or the work isn't done."},
             }),
             &["commentThreadId", "text"],
             false,
