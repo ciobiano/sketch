@@ -700,6 +700,7 @@ async fn claude_channel_delivers_new_mentions_while_tools_work() {
             file_id: Some("project".into()),
             thread_id: "thread".into(),
             message_id: id.into(),
+            also: Vec::new(),
         })
     };
     post("old");
@@ -726,11 +727,25 @@ async fn claude_channel_delivers_new_mentions_while_tools_work() {
         input.write_all(format!("{initialized}\n").as_bytes()).await.unwrap();
         post("first");
         post("reply");
+        // Comments held back and sent together arrive as one message that lists them all.
+        running.mentions.publish(mcp::mentions::Mention {
+            recipients: vec!["agent:claude-code".into()],
+            file_id: Some("project".into()),
+            thread_id: "thread".into(),
+            message_id: "batch".into(),
+            also: ["t2", "t3"]
+                .map(|t| mcp::mentions::MentionRef {
+                    thread_id: t.into(),
+                    message_id: format!("{t}-m"),
+                })
+                .to_vec(),
+        });
         let call = json!({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"get_basic_info","arguments":{}}});
         input.write_all(format!("{call}\n").as_bytes()).await.unwrap();
         let mut mentions = Vec::new();
+        let mut contents = Vec::new();
         let mut received_info = false;
-        while mentions.len() < 2 || !received_info {
+        while mentions.len() < 3 || !received_info {
             let msg: Value = serde_json::from_str(&lines.next_line().await.unwrap().unwrap()).unwrap();
             if msg["id"] == 2 {
                 assert!(msg["result"]["content"][0]["text"].as_str().unwrap().contains("fileId"));
@@ -738,9 +753,18 @@ async fn claude_channel_delivers_new_mentions_while_tools_work() {
             } else {
                 assert_eq!(msg["method"], "notifications/claude/channel");
                 mentions.push(msg["params"]["meta"].clone());
+                contents.push(msg["params"]["content"].as_str().unwrap().to_string());
             }
         }
-        assert_eq!(mentions, ["first","reply"].map(|id| json!({"fileId":"project","commentThreadId":"thread","messageId":id})));
+        assert_eq!(mentions[..2], ["first","reply"].map(|id| json!({"fileId":"project","commentThreadId":"thread","messageId":id})));
+        assert_eq!(
+            mentions[2],
+            json!({"fileId":"project","commentThreadId":"thread","messageId":"batch","count":"3"}),
+            "metadata stays string-valued"
+        );
+        for line in ["3 comments", "1. commentThreadId thread", "3. commentThreadId t3, messageId t3-m"] {
+            assert!(contents[2].contains(line), "{line:?} in {}", contents[2]);
+        }
     }).await.unwrap();
     child.kill().await.unwrap();
     running.stop();
@@ -759,6 +783,7 @@ async fn named_listeners_deliver_to_their_own_host() {
             file_id: Some("project".into()),
             thread_id: "thread".into(),
             message_id: id.into(),
+            also: Vec::new(),
         })
     };
     publish(&["agent"], "old");

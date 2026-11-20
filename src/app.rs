@@ -107,6 +107,7 @@ impl App {
             Start::Scratch(ed) => app.ed = *ed,
         }
         app.ed.me = crate::comments::local_author();
+        app.ed.delivery = crate::comments::local_delivery();
         app
     }
 
@@ -522,6 +523,7 @@ impl App {
                     recipients,
                     thread_id,
                     message_id,
+                    also,
                 } => {
                     if let Some((_, server)) = &self.mcp {
                         server.mentions.publish(crate::mcp::mentions::Mention {
@@ -529,6 +531,13 @@ impl App {
                             file_id: self.session.project.as_ref().map(|p| p.manifest.id.clone()),
                             thread_id,
                             message_id,
+                            also: also
+                                .into_iter()
+                                .map(|(thread_id, message_id)| crate::mcp::mentions::MentionRef {
+                                    thread_id,
+                                    message_id,
+                                })
+                                .collect(),
                         });
                     }
                 }

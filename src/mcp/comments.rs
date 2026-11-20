@@ -261,7 +261,13 @@ fn file_url(p: &std::path::Path) -> String {
     out
 }
 
-pub fn get_thread(ed: &Editor, a: &Map<String, Value>) -> ToolResult {
+pub fn get_thread(ed: &mut Editor, a: &Map<String, Value>) -> ToolResult {
+    // Reading a thread counts as picking it up, so it stops waiting to be sent.
+    let id = thread_arg(ed, a)?.1.id.clone();
+    if ed.comments.clear_pending(&id) {
+        written(ed);
+    }
+    let ed = &*ed;
     let (page, t) = thread_arg(ed, a)?;
     let dir = ed.project_dir.as_deref();
     let mut images = Vec::new();
@@ -390,6 +396,7 @@ pub fn set_status(ed: &mut Editor, a: &Map<String, Value>) -> ToolResult {
         Status::parse(st).ok_or_else(|| format!("status must be open or resolved, not `{st}`"))?;
     let by = agent();
     ed.comments.set_status(&id, status, &by, now_ms())?;
+    ed.comments.clear_pending(&id);
     written(ed);
     out(json!({"commentThreadId": id, "status": status.as_str()}))
 }
@@ -399,6 +406,7 @@ pub fn reply(ed: &mut Editor, a: &Map<String, Value>) -> ToolResult {
     let text = s(a, "text").ok_or("missing required string argument `text`")?;
     let by = agent();
     let mid = ed.comments.reply(&id, &by, Draft::text(text), now_ms())?;
+    ed.comments.clear_pending(&id);
     let t = ed.comments.thread(&id).expect("thread exists");
     let m = t.message(&mid).expect("message exists");
     let v = json!({
@@ -419,6 +427,7 @@ pub fn react(ed: &mut Editor, a: &Map<String, Value>) -> ToolResult {
     let by = agent();
     let message = s(a, "messageId");
     let now = ed.comments.react(&id, message, emoji, &by, Some(on))?;
+    ed.comments.clear_pending(&id);
     written(ed);
     out(json!({"commentThreadId": id, "emoji": emoji, "on": now}))
 }
