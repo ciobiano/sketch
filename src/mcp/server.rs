@@ -84,6 +84,8 @@ impl SketchServer {
     }
 }
 
+use super::mentions::valid_listener_name;
+
 impl ServerHandler for SketchServer {
     fn get_info(&self) -> ServerConfig {
         info()
@@ -106,7 +108,18 @@ impl ServerHandler for SketchServer {
             .as_ref()
             .and_then(|p| p.get("cursor"))
             .and_then(|v| v.as_str());
-        let batch = self.mentions.wait(cursor).await;
+        let name = request.params.as_ref().and_then(|p| p.get("agentName"));
+        let name = match name {
+            None => "Claude Code", // Bridges from the first channel release omit this field.
+            Some(v) => v
+                .as_str()
+                .filter(|s| valid_listener_name(s))
+                .ok_or_else(|| ErrorData::invalid_params("invalid agentName", None))?,
+        };
+        let batch = self
+            .mentions
+            .wait(cursor, crate::comments::Author::agent(Some(name)))
+            .await;
         Ok(rmcp::model::CustomResult::new(serde_json::json!(batch)))
     }
 

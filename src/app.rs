@@ -519,11 +519,13 @@ impl App {
             match req {
                 AppRequest::Home => self.go_home(),
                 AppRequest::CommentMention {
+                    recipients,
                     thread_id,
                     message_id,
                 } => {
                     if let Some((_, server)) = &self.mcp {
                         server.mentions.publish(crate::mcp::mentions::Mention {
+                            recipients,
                             file_id: self.session.project.as_ref().map(|p| p.manifest.id.clone()),
                             thread_id,
                             message_id,
@@ -660,6 +662,9 @@ impl App {
     fn redraw(&mut self) {
         let now = self.now();
         self.ed.tick(now);
+        if let Some((_, server)) = &self.mcp {
+            self.ed.comments.connected_agents = server.mentions.connected_agents();
+        }
         let Some(g) = self.gfx.as_mut() else { return };
         let input = g.egui.take_egui_input(&g.window);
         let mut l = frame::layout(&self.ctx, input, &mut self.ed, &mut self.st);

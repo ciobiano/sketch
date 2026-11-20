@@ -270,6 +270,8 @@ pub struct Comments {
     pub threads: Vec<Thread>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub authors: Vec<Author>,
+    #[serde(skip)]
+    pub connected_agents: Vec<Author>,
 }
 
 impl Comments {
@@ -289,7 +291,10 @@ impl Comments {
     }
 
     pub fn author(&self, id: &str) -> Option<&Author> {
-        self.authors.iter().find(|a| a.id == id)
+        self.authors
+            .iter()
+            .chain(&self.connected_agents)
+            .find(|a| a.id == id)
     }
 
     /// The author's display name, or the id for an author this project doesn't know.
@@ -310,8 +315,8 @@ impl Comments {
     /// Authors who can be @mentioned, `me` first and [`ANY_AGENT`] last.
     pub fn mentionable(&self, me: &Author) -> Vec<Author> {
         let mut v = vec![me.clone()];
-        for a in &self.authors {
-            if a.id != me.id {
+        for a in self.authors.iter().chain(&self.connected_agents) {
+            if !v.iter().any(|other| other.id == a.id) {
                 v.push(a.clone());
             }
         }

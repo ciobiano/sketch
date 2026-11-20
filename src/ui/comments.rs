@@ -1316,9 +1316,10 @@ fn notify_mention(ed: &mut Editor, thread_id: &str) {
         && message
             .mentions
             .iter()
-            .any(|id| matches!(id.as_str(), comments::ANY_AGENT | comments::CLAUDE_CODE))
+            .any(|id| id == comments::ANY_AGENT || id.starts_with("agent:"))
     {
         ed.requests.push(AppRequest::CommentMention {
+            recipients: message.mentions.clone(),
             thread_id: thread_id.to_owned(),
             message_id: message.id.clone(),
         });
@@ -1760,13 +1761,17 @@ mod tests {
         st.new.as_mut().unwrap().composer.text = "@Claude Code check the title".into();
         apply(&mut ed, &mut st, vec![Act::Post]);
         let thread = st.open.clone().unwrap();
-        let event = |message_id: &String| AppRequest::CommentMention {
+        let event = |message_id: &String, recipient: &str| AppRequest::CommentMention {
+            recipients: vec![recipient.to_owned()],
             thread_id: thread.clone(),
             message_id: message_id.clone(),
         };
         assert_eq!(
             ed.requests.pop(),
-            Some(event(&ed.comments.thread(&thread).unwrap().messages[0].id))
+            Some(event(
+                &ed.comments.thread(&thread).unwrap().messages[0].id,
+                comments::CLAUDE_CODE
+            ))
         );
         st.reply.text = "plain reply".into();
         apply(&mut ed, &mut st, vec![Act::Reply(thread.clone())]);
@@ -1775,16 +1780,25 @@ mod tests {
         apply(&mut ed, &mut st, vec![Act::Reply(thread.clone())]);
         assert_eq!(
             ed.requests.pop(),
-            Some(event(&ed.comments.thread(&thread).unwrap().messages[2].id))
+            Some(event(
+                &ed.comments.thread(&thread).unwrap().messages[2].id,
+                comments::ANY_AGENT
+            ))
         );
         st.reply.text = "@Codex only".into();
-        ed.comments.touch_author(&Author::agent(Some("Codex")));
+        ed.comments
+            .connected_agents
+            .push(Author::agent(Some("Codex")));
         apply(
             &mut ed,
             &mut st,
             vec![Act::Reply(thread.clone()), Act::Close, Act::Show(thread)],
         );
-        assert!(ed.requests.is_empty());
+        assert_eq!(
+            ed.requests.len(),
+            1,
+            "a named Codex mention must be delivered"
+        );
     }
 
     #[test]
