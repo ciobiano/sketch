@@ -171,8 +171,23 @@ pub fn capture(
     ppp: f32,
     prepare: impl FnOnce(&mut Editor),
 ) -> image::RgbaImage {
+    capture_hovering(gpu, ed, st, size_points, ppp, None, prepare)
+}
+
+/// [`capture`] with the pointer resting at `pointer` (in points), for hover states.
+pub fn capture_hovering(
+    gpu: &super::gpu::Headless,
+    ed: &mut Editor,
+    st: &mut UiState,
+    size_points: [f32; 2],
+    ppp: f32,
+    pointer: Option<egui::Pos2>,
+    prepare: impl FnOnce(&mut Editor),
+) -> image::RgbaImage {
     let ctx = egui::Context::default();
     ui::setup_style(&ctx);
+    // Each capture is a still: skip fades and other animations.
+    ctx.all_styles_mut(|s| s.animation_time = 0.0);
     let size = [
         (size_points[0] * ppp).round() as u32,
         (size_points[1] * ppp).round() as u32,
@@ -190,6 +205,9 @@ pub fn capture(
             },
         ))
         .collect(),
+        events: pointer
+            .map(|p| vec![egui::Event::PointerMoved(p)])
+            .unwrap_or_default(),
         ..Default::default()
     };
     // egui needs a couple of passes to settle sizes and fonts.

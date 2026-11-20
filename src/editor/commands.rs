@@ -14,6 +14,8 @@ pub enum UiEvent {
     ToggleUi,
     ToggleHelp,
     ToggleGrid,
+    /// Show or hide comment pins on the canvas.
+    ToggleComments,
     /// Start a comment thread at a page position, pinned to `node` when there is one.
     Comment {
         node: Option<NodeId>,

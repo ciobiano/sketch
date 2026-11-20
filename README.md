@@ -197,13 +197,16 @@ menu switches to another token or unlinks the field, which keeps the current val
 value into a linked field unlinks it. Each pick or unlink is one undo step.
 
 **Comments** pin feedback to the design. Press C (or pick the speech bubble in the toolbar),
-click a layer or an empty spot, type and press Return; Shift+Return starts a new line. The pin
-follows its layer when the layer moves. Click a pin to read the thread, reply, add an emoji
-reaction, attach files (copied into the project's `attachments/` folder), resolve or reopen
-it, or delete it. Type `@` to mention someone who has commented in the project, or `@agent` for
-any agent. The Comments tab in the left sidebar lists open, resolved or all threads; clicking
-one jumps to its pin. Your name comes from your macOS account the first time you comment;
-click it at the top of the Comments tab to change it.
+click a layer or an empty spot, type and press Return; Shift+Return starts a new line. While
+commenting, dragging moves the canvas, and a click places a comment. Pins stay on the canvas
+after you close a thread, resolved ones included (they turn grey with a check), and follow
+their layer when it moves. Hover a pin to preview the thread; click it to read it, reply,
+react, attach files (copied into the project's `attachments/` folder), resolve or reopen it,
+or delete it. A reply you leave unsent is still there when you reopen the thread. Type `@` to
+mention someone who has commented in the project, or `@agent` for any agent; arrow keys and
+Return pick a name. Shift+C hides or shows the pins. The Comments tab in the left sidebar
+lists open, resolved or all threads; clicking one jumps to its pin. Your name comes from your
+macOS account the first time you comment; Rename at the bottom of the Comments tab changes it.
 
 Agents work through the same threads. `list_comment_threads` finds open feedback
 (`mentionedUserId: "agent"` narrows it to threads that say @agent), `get_comment_thread`
@@ -279,7 +282,7 @@ select, Shift-click to add, double-click to rename, and use 👁 / 🔒 to hide 
 | P, ⇧P / 7 | Pen, pencil | ⌥A ⌥H ⌥D / ⌥W ⌥V ⌥S | Align left/center/right, top/middle/bottom |
 | T / 8, S | Text, sticky note | ⌥⇧H / ⌥⇧V | Distribute spacing |
 | K | Laser pointer | ⌥⇧U S I E | Union, subtract, intersect, exclude |
-| C | Comment | | |
+| C | Comment | ⇧C | Show / hide comments |
 | E / 0 | Eraser | ⌘E | Flatten |
 | 9, ⌘⇧K | Place image | ⌘B / ⌘I / ⌘U / ⌘⇧X | Bold, italic, underline, strikethrough |
 | Enter / ⇧Enter | Edit (text, path) / select parent | ⌘⌥H | Hand-drawn style |

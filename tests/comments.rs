@@ -1,6 +1,8 @@
 //! Comments: people pin feedback to layers, agents find it over MCP, reply, react and
 //! resolve it, and everything is saved with the project.
 
+mod common;
+
 use rmcp::ServiceExt;
 use rmcp::model::{CallToolRequestParams, ClientConfig, ContentBlock};
 use serde_json::{Value, json};
@@ -318,4 +320,145 @@ async fn replies_over_http_carry_the_clients_name() {
         comments.thread(&t).unwrap().messages[1].author,
         "agent:test-agent"
     );
+}
+
+/// Renders the comment states offscreen to `.artifacts/comments-ui/` for design review.
+#[test]
+fn comments_ui_states() {
+    use sketch_rs::render::frame;
+    use sketch_rs::ui::UiState;
+    let Some(g) = common::gpu() else { return };
+    let dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(".artifacts/comments-ui");
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut e = sketch_rs::demo::showcase();
+    e.me = Author::person("user:raph", "Raph");
+    let ann = Author::person("user:ann", "Ann");
+    let agent = Author::agent(Some("claude-code"));
+    let page = e.active_page_id().to_string();
+    let nodes: Vec<NodeId> = e.doc.root.clone();
+    let at = |e: &sketch_rs::editor::Editor, i: usize, dx: f64, dy: f64| {
+        let r = e.doc.world_rect(nodes[i % nodes.len()]).unwrap();
+        v2(r.x + dx, r.y + dy)
+    };
+    let me = e.me.clone();
+    let p1 = Pin::new(&e.doc, &page, Some(nodes[0]), at(&e, 0, 60.0, 40.0));
+    let t1 = e.comments.add_thread(
+        &ann,
+        &p1,
+        Draft::text("The hero headline feels cramped. @agent can you loosen the line height?"),
+        &e.doc,
+        1_000,
+    );
+    e.comments
+        .reply(
+            &t1,
+            &agent,
+            Draft::text("On it. Line height is now 1.3 @Ann"),
+            2_000,
+        )
+        .unwrap();
+    e.comments.react(&t1, None, "👍", &me, None).unwrap();
+    let p2 = Pin::new(&e.doc, &page, nodes.get(1).copied(), at(&e, 1, 30.0, 30.0));
+    e.comments.add_thread(
+        &me,
+        &p2,
+        Draft::text("Use the brand blue here"),
+        &e.doc,
+        3_000,
+    );
+    let p3 = Pin::new(&e.doc, &page, nodes.get(2).copied(), at(&e, 2, 20.0, 80.0));
+    e.comments.add_thread(
+        &agent,
+        &p3,
+        Draft::text("I left the old copy below in case you want it back."),
+        &e.doc,
+        4_000,
+    );
+    let mut st = UiState {
+        project_name: "Launch plan".into(),
+        save_state: "Saved".into(),
+        ..Default::default()
+    };
+    let size = [1440.0, 900.0];
+    let shot = |name: &str,
+                e: &mut sketch_rs::editor::Editor,
+                st: &mut UiState,
+                ptr: Option<egui::Pos2>| {
+        let img = frame::capture_hovering(g, e, st, size, 2.0, ptr, |ed| ed.zoom_to_fit());
+        img.save(dir.join(format!("{name}.png"))).unwrap();
+    };
+    shot("1-pins", &mut e, &mut st, None);
+    assert_eq!(st.comments.drawn.len(), 3, "every open thread has a pin");
+    let pin1 = st
+        .comments
+        .drawn
+        .iter()
+        .find(|(id, _)| *id == t1)
+        .unwrap()
+        .1;
+    shot(
+        "2-hover",
+        &mut e,
+        &mut st,
+        Some(pin1 + egui::vec2(10.0, -12.0)),
+    );
+    st.comments.open = Some(t1.clone());
+    shot("3-thread", &mut e, &mut st, None);
+    st.comments.open = None;
+    shot("4-closed", &mut e, &mut st, None);
+    assert_eq!(
+        st.comments.drawn.len(),
+        3,
+        "pins stay after the thread closes"
+    );
+    // Resolving keeps the pin too, so the discussion can be found again.
+    let me = e.me.clone();
+    e.comments
+        .set_status(&t1, Status::Resolved, &me, 5_000)
+        .unwrap();
+    shot("4b-resolved", &mut e, &mut st, None);
+    assert_eq!(
+        st.comments.drawn.len(),
+        3,
+        "resolved pins stay on the canvas"
+    );
+    st.comments.hidden = true;
+    shot("4c-hidden", &mut e, &mut st, None);
+    assert!(st.comments.drawn.is_empty(), "Shift+C hides them");
+    st.comments.hidden = false;
+    e.comments
+        .set_status(&t1, Status::Open, &me, 6_000)
+        .unwrap();
+    let spot = at(&e, 0, 300.0, 120.0);
+    st.comments.start(&mut e, None, spot);
+    st.comments.new.as_mut().unwrap().composer.text = "Tighten this up @".into();
+    shot("5-new", &mut e, &mut st, None);
+    st.comments.close(&e);
+    st.show_comments = true;
+    shot("6-panel", &mut e, &mut st, None);
+}
+
+/// With the Comment tool a click pins a comment and a drag moves the canvas.
+#[test]
+fn comment_tool_clicks_to_comment_and_drags_to_pan() {
+    use sketch_rs::editor::Tool;
+    use sketch_rs::editor::commands::UiEvent;
+    let mut e = common::editor(800.0, 600.0);
+    e.tool = Tool::Comment;
+    common::ev_drag(&mut e, v2(200.0, 200.0), v2(200.0, 200.0), 0.0, true);
+    assert!(
+        matches!(e.ui_events.as_slice(), [UiEvent::Comment { .. }]),
+        "{:?}",
+        e.ui_events
+    );
+    e.ui_events.clear();
+    let pan = e.camera.pan;
+    common::ev_drag(&mut e, v2(200.0, 200.0), v2(320.0, 260.0), 1_000.0, true);
+    assert!(e.ui_events.is_empty(), "a drag starts no comment");
+    let moved = e.camera.pan - pan;
+    assert!(
+        (moved.x + 120.0).abs() < 1e-6 && (moved.y + 60.0).abs() < 1e-6,
+        "the canvas follows the pointer: {moved:?}"
+    );
+    assert_eq!(e.tool, Tool::Comment, "still commenting");
 }

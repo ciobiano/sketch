@@ -154,6 +154,12 @@ enum Gesture {
         scope: Option<NodeId>,
         base: Vec<NodeId>,
     },
+    /// Comment tool pressed: a click starts a comment there, a drag pans the canvas.
+    CommentPress {
+        start_screen: V2,
+        world: V2,
+        node: Option<NodeId>,
+    },
     /// Pressed on a node; becomes Move once the pointer travels far enough.
     Press {
         start_screen: V2,
@@ -788,8 +794,11 @@ impl Editor {
             Tool::Comment => {
                 self.end_text_edit();
                 let node = hit::hit_test(&self.doc, world, self.camera.zoom);
-                self.ui_events
-                    .push(commands::UiEvent::Comment { node, world });
+                self.gesture = Gesture::CommentPress {
+                    start_screen: pos,
+                    world,
+                    node,
+                };
             }
             Tool::Frame
             | Tool::Rect
@@ -1085,6 +1094,23 @@ impl Editor {
                 self.camera.pan_by_screen(pos - last);
                 self.revision += 1;
                 self.gesture = Gesture::Pan { last: pos };
+            }
+            Gesture::CommentPress {
+                start_screen,
+                world,
+                node,
+            } => {
+                if pos.dist(start_screen) < DRAG_THRESHOLD {
+                    self.gesture = Gesture::CommentPress {
+                        start_screen,
+                        world,
+                        node,
+                    };
+                } else {
+                    self.camera.pan_by_screen(pos - start_screen);
+                    self.revision += 1;
+                    self.gesture = Gesture::Pan { last: pos };
+                }
             }
             Gesture::Press {
                 start_screen,
@@ -1474,6 +1500,10 @@ impl Editor {
         let _ = button;
         match std::mem::replace(&mut self.gesture, Gesture::None) {
             Gesture::None | Gesture::Pan { .. } => {}
+            Gesture::CommentPress { world, node, .. } => {
+                self.ui_events
+                    .push(commands::UiEvent::Comment { node, world });
+            }
             Gesture::Press { click_select, .. } => {
                 if let Some(id) = click_select {
                     if self.mods.shift {
@@ -2004,6 +2034,7 @@ impl Editor {
             A::ToggleUi => self.ui_events.push(commands::UiEvent::ToggleUi),
             A::ToggleHelp => self.ui_events.push(commands::UiEvent::ToggleHelp),
             A::ToggleGrid => self.ui_events.push(commands::UiEvent::ToggleGrid),
+            A::ToggleComments => self.ui_events.push(commands::UiEvent::ToggleComments),
             A::SelectNext => self.select_sibling(true),
             A::SelectPrev => self.select_sibling(false),
             A::SelectParent => self.select_parent(),

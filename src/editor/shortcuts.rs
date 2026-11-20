@@ -59,6 +59,7 @@ pub enum Action {
     ToggleUi,
     ToggleHelp,
     ToggleGrid,
+    ToggleComments,
     SelectNext,
     SelectPrev,
     SelectParent,
@@ -165,6 +166,7 @@ fn bindings() -> Vec<(Key, Chord, Action, &'static str)> {
         (Char('/'), CMD, A::ToggleHelp, "Keyboard shortcuts"),
         (Char('?'), SHIFT, A::ToggleHelp, "Keyboard shortcuts"),
         (Char('\''), CMD_SHIFT, A::ToggleGrid, "Show / hide dot grid"),
+        (Char('c'), SHIFT, A::ToggleComments, "Show / hide comments"),
         (Tab, PLAIN, A::SelectNext, "Select next sibling"),
         (Tab, SHIFT, A::SelectPrev, "Select previous sibling"),
         (Enter, SHIFT, A::SelectParent, "Select parent"),
@@ -420,6 +422,7 @@ pub fn category(a: Action) -> &'static str {
         | A::ZoomSelection
         | A::ToggleSnapping
         | A::ToggleGrid
+        | A::ToggleComments
         | A::ToggleUi
         | A::ToggleHelp
         | A::NextPage
@@ -602,6 +605,7 @@ pub fn menus() -> Vec<(&'static str, Vec<MenuEntry>)> {
                 S,
                 I("Snapping", A::ToggleSnapping),
                 I("Dot Grid", A::ToggleGrid),
+                I("Comments", A::ToggleComments),
                 I("Show/Hide UI", A::ToggleUi),
                 I("Keyboard Shortcuts", A::ToggleHelp),
             ],

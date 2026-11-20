@@ -105,6 +105,14 @@ pub fn draw(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) -> egui::Rect {
             UiEvent::ToggleUi => st.hide_ui = !st.hide_ui,
             UiEvent::ToggleHelp => st.show_help = !st.show_help,
             UiEvent::ToggleGrid => st.show_grid_off = !st.show_grid_off,
+            UiEvent::ToggleComments => {
+                st.comments.hidden = !st.comments.hidden;
+                ed.status = if st.comments.hidden {
+                    "Comments hidden. Shift+C shows them again".into()
+                } else {
+                    "Comments shown".into()
+                };
+            }
             UiEvent::Comment { node, world } => st.comments.start(ed, node, world),
         }
     }
