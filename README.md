@@ -215,7 +215,23 @@ images too), and the agent replies, reacts and resolves under its own name, take
 MCP client (Claude Code shows as "Claude Code"). People who share a project folder each
 comment under their own name.
 
-### Send a mention to Claude Code
+### Deliver mentions to a running agent
+
+Run one listener per receiving conversation. Its name appears in the Sketch comment picker while it is connected. A named mention goes to listeners with that name. During testing, `@agent` reaches every listener. Two sessions registered under the same name both receive its mentions.
+
+Build the app and bridge with `cargo build --bins`. For a Codex conversation in T3 Code, run this in the foreground with the ID of the conversation you want to receive comments:
+
+```sh
+target/debug/sketch-rs-mcp --deliver-mentions Codex -- t3 thread send "$T3CODE_THREAD_ID" -
+```
+
+T3 sets `T3CODE_THREAD_ID` inside a thread. In a separate terminal, substitute the destination thread ID. The same command works for another T3 provider when you change the listener name and destination thread. Set `SKETCH_RS_MCP_PORT` to the running app's port when using a development build.
+
+For another host, replace the command after `--` with its message sender. Sketch runs it once per mention and writes one JSON event to its standard input. The event contains the local `mcpUrl` and a `mention` object with `commentThreadId`, `messageId`, and `fileId` when available. Configure the host to use that Sketch MCP endpoint. The host needs a way to submit a message to an existing conversation.
+
+Posting a new comment or reply in Sketch triggers delivery. The listener starts at the latest comment, retries a failed command, and advances after a successful exit. A receiver can use the message ID to deduplicate a retry. A running listener can recover up to 64 recent events after a disconnect. Stop the listener with Ctrl+C.
+
+### Use Claude Code's native channel
 
 Run Sketch and its stdio bridge from the same build. From the checkout, build both and register the bridge with Claude Code in this directory:
 
@@ -232,7 +248,7 @@ claude --dangerously-load-development-channels server:sketch-mentions
 
 Claude Code asks you to confirm the custom development channel. If Sketch uses a custom port, set `SKETCH_RS_MCP_PORT` to the same value when starting Sketch and Claude Code.
 
-Post a new comment or reply containing `@Claude Code` or `@agent`. Each connected channel session receives the project, thread and message IDs and can read the feedback and reply in Sketch. You can mention Claude Code before its first reply. Opening a saved project or posting a reply through MCP sends no event. Comments posted while the channel is offline are still available through `list_comment_threads`.
+Post a new comment or reply containing `@Claude Code` or `@agent`. Each addressed session receives the project, thread and message IDs and can read the feedback and reply in Sketch. You can mention Claude Code before its first reply. Opening a saved project or posting a reply through MCP sends no event. Comments posted while the channel is offline are still available through `list_comment_threads`.
 
 Claude documents the startup flag and organization settings in its [channels reference](https://code.claude.com/docs/en/channels-reference).
 

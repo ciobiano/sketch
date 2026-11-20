@@ -131,6 +131,7 @@ pub enum AppRequest {
     /// Pick files to attach to the comment being written (into `Editor::picked_files`).
     PickAttachments,
     CommentMention {
+        recipients: Vec<String>,
         thread_id: String,
         message_id: String,
     },

@@ -25,6 +25,8 @@ sketch-rs-mcp: stdio MCP bridge to the running Sketch app
 USAGE:
   sketch-rs-mcp           serve MCP on stdin/stdout (what agent harnesses run)
   sketch-rs-mcp --claude-channel   also deliver new comment mentions to Claude Code
+  sketch-rs-mcp --deliver-mentions NAME -- PROGRAM [ARGS...]
+                         send each new mention as JSON to the program on stdin
   sketch-rs-mcp --url     print the HTTP endpoint it relays to
   sketch-rs-mcp --help
 
@@ -130,7 +132,7 @@ impl ServerHandler for Bridge {
             self.listener_started.call_once(|| {
                 tokio::spawn(channel::listen(
                     self.url.clone(),
-                    context.peer,
+                    channel::Destination::Claude(context.peer),
                     cursor.get().cloned().flatten(),
                 ));
             });
@@ -176,11 +178,11 @@ fn main() -> std::process::ExitCode {
         .init();
     let args: Vec<String> = std::env::args().skip(1).collect();
     let url = mcp::url(mcp::port());
-    if args.iter().any(|a| a == "--help" || a == "-h") {
+    if matches!(args.first().map(String::as_str), Some("--help" | "-h")) {
         print!("{USAGE}");
         return std::process::ExitCode::SUCCESS;
     }
-    if args.iter().any(|a| a == "--url") {
+    if args.first().is_some_and(|a| a == "--url") {
         println!("{url}");
         return std::process::ExitCode::SUCCESS;
     }
@@ -196,6 +198,27 @@ fn main() -> std::process::ExitCode {
         }
     };
     let r = rt.block_on(async move {
+        if args.first().is_some_and(|a| a == "--deliver-mentions") {
+            let [_, name, separator, program, rest @ ..] = args.as_slice() else {
+                return Err(USAGE.to_owned());
+            };
+            if separator != "--" || program.is_empty() || !mcp::mentions::valid_listener_name(name)
+            {
+                return Err(USAGE.to_owned());
+            }
+            let mut argv = vec![program.clone()];
+            argv.extend_from_slice(rest);
+            channel::listen(
+                url,
+                channel::Destination::Command {
+                    agent: name.clone(),
+                    argv,
+                },
+                None,
+            )
+            .await;
+            return Ok(());
+        }
         let bridge = Bridge {
             url,
             channel_cursor: args

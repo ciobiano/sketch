@@ -689,60 +689,137 @@ fn agent_design_screenshot() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn claude_channel_delivers_new_mentions_while_tools_work() {
-    use rmcp::model::CustomNotification;
+    use std::process::Stdio;
     use std::time::Duration;
-
-    struct Listener(tokio::sync::mpsc::UnboundedSender<CustomNotification>);
-    impl rmcp::ClientHandler for Listener {
-        async fn on_custom_notification(
-            &self,
-            n: CustomNotification,
-            _: rmcp::service::NotificationContext<rmcp::RoleClient>,
-        ) {
-            self.0.send(n).unwrap();
-        }
-    }
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 
     let (running, _worker) = spawn_app();
     let post = |id: &str| {
         running.mentions.publish(mcp::mentions::Mention {
+            recipients: vec!["agent:claude-code".into()],
             file_id: Some("project".into()),
             thread_id: "thread".into(),
             message_id: id.into(),
         })
     };
     post("old");
-    let mut cmd = tokio::process::Command::new(env!("CARGO_BIN_EXE_sketch-rs-mcp"));
-    cmd.arg("--claude-channel")
-        .env("SKETCH_RS_MCP_PORT", running.port.to_string());
-    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
-    let client = Listener(tx)
-        .serve(rmcp::transport::TokioChildProcess::new(cmd).unwrap())
-        .await
+    // Read the wire in order. rmcp dispatches client notification callbacks concurrently.
+    let mut child = tokio::process::Command::new(env!("CARGO_BIN_EXE_sketch-rs-mcp"))
+        .arg("--claude-channel")
+        .env("SKETCH_RS_MCP_PORT", running.port.to_string())
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .kill_on_drop(true)
+        .spawn()
         .unwrap();
-    let info = client.peer_info().unwrap();
-    assert!(
-        info.capabilities
-            .experimental
-            .as_ref()
-            .unwrap()
-            .contains_key("claude/channel")
-    );
-    assert!(info.protocol_version <= rmcp::model::ProtocolVersion::V_2025_11_25);
-    post("first");
-    post("reply");
-    draw_frame_with_text(&client).await;
-    for id in ["first", "reply"] {
-        let n = tokio::time::timeout(Duration::from_secs(4), rx.recv())
-            .await
-            .unwrap()
-            .unwrap();
-        assert_eq!(n.method, "notifications/claude/channel");
-        assert_eq!(
-            n.params.unwrap()["meta"],
-            json!({"fileId":"project","commentThreadId":"thread","messageId":id})
-        );
-    }
-    client.cancel().await.unwrap();
+    let mut input = child.stdin.take().unwrap();
+    let mut lines = BufReader::new(child.stdout.take().unwrap()).lines();
+    tokio::time::timeout(Duration::from_secs(8), async {
+        let init = json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{
+            "protocolVersion":"2025-11-25","clientInfo":{"name":"claude-code","version":"1"},"capabilities":{}
+        }});
+        input.write_all(format!("{init}\n").as_bytes()).await.unwrap();
+        let response: Value = serde_json::from_str(&lines.next_line().await.unwrap().unwrap()).unwrap();
+        assert_eq!(response["result"]["protocolVersion"], "2025-11-25");
+        assert!(response["result"]["capabilities"]["experimental"]["claude/channel"].is_object());
+        let initialized = json!({"jsonrpc":"2.0","method":"notifications/initialized"});
+        input.write_all(format!("{initialized}\n").as_bytes()).await.unwrap();
+        post("first");
+        post("reply");
+        let call = json!({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"get_basic_info","arguments":{}}});
+        input.write_all(format!("{call}\n").as_bytes()).await.unwrap();
+        let mut mentions = Vec::new();
+        let mut received_info = false;
+        while mentions.len() < 2 || !received_info {
+            let msg: Value = serde_json::from_str(&lines.next_line().await.unwrap().unwrap()).unwrap();
+            if msg["id"] == 2 {
+                assert!(msg["result"]["content"][0]["text"].as_str().unwrap().contains("fileId"));
+                received_info = true;
+            } else {
+                assert_eq!(msg["method"], "notifications/claude/channel");
+                mentions.push(msg["params"]["meta"].clone());
+            }
+        }
+        assert_eq!(mentions, ["first","reply"].map(|id| json!({"fileId":"project","commentThreadId":"thread","messageId":id})));
+    }).await.unwrap();
+    child.kill().await.unwrap();
     running.stop();
+}
+
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn named_listeners_deliver_to_their_own_host() {
+    use std::time::Duration;
+    let (running, _worker) = spawn_app();
+    let dir = std::env::temp_dir().join(format!("sketch-mentions-{:016x}", fastrand::u64(..)));
+    std::fs::create_dir(&dir).unwrap();
+    let publish = |recipients: &[&str], id: &str| {
+        running.mentions.publish(mcp::mentions::Mention {
+            recipients: recipients.iter().map(|s| s.to_string()).collect(),
+            file_id: Some("project".into()),
+            thread_id: "thread".into(),
+            message_id: id.into(),
+        })
+    };
+    publish(&["agent"], "old");
+    let mut listeners = Vec::new();
+    for name in ["Codex", "Design Bot"] {
+        let child = tokio::process::Command::new(env!("CARGO_BIN_EXE_sketch-rs-mcp"))
+            .args([
+                "--deliver-mentions",
+                name,
+                "--",
+                "sh",
+                "-c",
+                r#"cat >> "$1""#,
+                "handler",
+            ])
+            .arg(dir.join(name))
+            .env("SKETCH_RS_MCP_PORT", running.port.to_string())
+            .kill_on_drop(true)
+            .spawn()
+            .unwrap();
+        listeners.push(child);
+    }
+    tokio::time::timeout(Duration::from_secs(8), async {
+        while running.mentions.connected_agents().len() < 2 {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("listeners register their names");
+    publish(&["agent:codex"], "only-codex");
+    publish(&["agent:design-bot"], "only-design");
+    publish(&["agent:claude-code"], "only-claude");
+    publish(&["agent", "agent:codex"], "shared");
+    for (name, first) in [("Codex", "only-codex"), ("Design Bot", "only-design")] {
+        let body = tokio::time::timeout(Duration::from_secs(8), async {
+            loop {
+                let body = std::fs::read_to_string(dir.join(name)).unwrap_or_default();
+                if body.ends_with('\n') && body.lines().count() >= 2 {
+                    break body;
+                }
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .expect("host receives both events");
+        let events: Vec<Value> = body
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect();
+        assert_eq!(events.len(), 2);
+        for (event, id) in events.iter().zip([first, "shared"]) {
+            assert_eq!(event["mcpUrl"], running.url());
+            assert_eq!(
+                event["mention"],
+                json!({"fileId":"project","commentThreadId":"thread","messageId":id})
+            );
+        }
+    }
+    for mut listener in listeners {
+        listener.kill().await.unwrap();
+    }
+    running.stop();
+    std::fs::remove_dir_all(dir).unwrap();
 }
