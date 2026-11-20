@@ -130,6 +130,10 @@ pub enum AppRequest {
     ImageFill(Vec<NodeId>, usize),
     /// Pick files to attach to the comment being written (into `Editor::picked_files`).
     PickAttachments,
+    CommentMention {
+        thread_id: String,
+        message_id: String,
+    },
     /// Open a file (a comment attachment) in its default app.
     OpenFile(PathBuf),
 }

@@ -1308,6 +1308,23 @@ fn send_button(ui: &mut Ui, ready: bool) -> egui::Response {
     resp.on_hover_text("Send (Return)")
 }
 
+fn notify_mention(ed: &mut Editor, thread_id: &str) {
+    if let Some(message) = ed
+        .comments
+        .thread(thread_id)
+        .and_then(|t| t.messages.last())
+        && message
+            .mentions
+            .iter()
+            .any(|id| matches!(id.as_str(), comments::ANY_AGENT | comments::CLAUDE_CODE))
+    {
+        ed.requests.push(AppRequest::CommentMention {
+            thread_id: thread_id.to_owned(),
+            message_id: message.id.clone(),
+        });
+    }
+}
+
 fn apply(ed: &mut Editor, st: &mut CommentsUi, acts: Vec<Act>) {
     let now = now_ms();
     let me = ed.me.clone();
@@ -1331,6 +1348,7 @@ fn apply(ed: &mut Editor, st: &mut CommentsUi, acts: Vec<Act>) {
                 if let Some(mut n) = st.new.take() {
                     let draft = n.composer.take();
                     let id = ed.comments.add_thread(&me, &n.pin, draft, &ed.doc, now);
+                    notify_mention(ed, &id);
                     st.open = Some(id);
                     st.focus = true;
                     changed = true;
@@ -1340,7 +1358,9 @@ fn apply(ed: &mut Editor, st: &mut CommentsUi, acts: Vec<Act>) {
             Act::Reply(t) => {
                 let draft = st.reply.take();
                 changed = true;
-                ed.comments.reply(&t, &me, draft, now).map(|_| ())
+                ed.comments
+                    .reply(&t, &me, draft, now)
+                    .map(|_| notify_mention(ed, &t))
             }
             Act::React(t, m, e) => {
                 changed = true;
@@ -1731,6 +1751,41 @@ pub fn reveal(ed: &mut Editor, st: &mut CommentsUi, page: usize, id: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_new_local_agent_mentions_notify_the_channel() {
+        let mut ed = Editor::default();
+        let mut st = CommentsUi::default();
+        st.start(&mut ed, None, crate::geom::v2(1.0, 2.0));
+        st.new.as_mut().unwrap().composer.text = "@Claude Code check the title".into();
+        apply(&mut ed, &mut st, vec![Act::Post]);
+        let thread = st.open.clone().unwrap();
+        let event = |message_id: &String| AppRequest::CommentMention {
+            thread_id: thread.clone(),
+            message_id: message_id.clone(),
+        };
+        assert_eq!(
+            ed.requests.pop(),
+            Some(event(&ed.comments.thread(&thread).unwrap().messages[0].id))
+        );
+        st.reply.text = "plain reply".into();
+        apply(&mut ed, &mut st, vec![Act::Reply(thread.clone())]);
+        assert!(ed.requests.is_empty());
+        st.reply.text = "another look @agent".into();
+        apply(&mut ed, &mut st, vec![Act::Reply(thread.clone())]);
+        assert_eq!(
+            ed.requests.pop(),
+            Some(event(&ed.comments.thread(&thread).unwrap().messages[2].id))
+        );
+        st.reply.text = "@Codex only".into();
+        ed.comments.touch_author(&Author::agent(Some("Codex")));
+        apply(
+            &mut ed,
+            &mut st,
+            vec![Act::Reply(thread.clone()), Act::Close, Act::Show(thread)],
+        );
+        assert!(ed.requests.is_empty());
+    }
 
     #[test]
     fn closing_a_draft_forgets_it() {

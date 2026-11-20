@@ -5,15 +5,18 @@
 //! started; calls are forwarded to the app and report a clear error while it isn't running.
 //! The connection is opened lazily and re-opened after the app restarts.
 
+#[path = "sketch-rs-mcp/channel.rs"]
+mod channel;
+
 use rmcp::model::{
     CallToolRequestParams, CallToolResponse, CallToolResult, ClientConfig, ContentBlock,
-    Implementation, ListToolsResult, PaginatedRequestParams, ResultType, ServerConfig,
+    Implementation, ListToolsResult, PaginatedRequestParams, ProtocolVersion, ResultType,
+    ServerConfig,
 };
-use rmcp::service::{RequestContext, RunningService};
+use rmcp::service::{NotificationContext, RequestContext, RunningService};
 use rmcp::transport::StreamableHttpClientTransport;
 use rmcp::{ErrorData, RoleClient, RoleServer, ServerHandler, ServiceExt};
 use sketch_rs::mcp::{self, server};
-use std::sync::Arc;
 use tokio::sync::Mutex;
 
 const USAGE: &str = "\
@@ -21,6 +24,7 @@ sketch-rs-mcp: stdio MCP bridge to the running Sketch app
 
 USAGE:
   sketch-rs-mcp           serve MCP on stdin/stdout (what agent harnesses run)
+  sketch-rs-mcp --claude-channel   also deliver new comment mentions to Claude Code
   sketch-rs-mcp --url     print the HTTP endpoint it relays to
   sketch-rs-mcp --help
 
@@ -30,10 +34,11 @@ the port (in both the app's and the bridge's environment).
 
 type Client = RunningService<RoleClient, ClientConfig>;
 
-#[derive(Clone)]
 struct Bridge {
     url: String,
-    client: Arc<Mutex<Option<Client>>>,
+    channel_cursor: Option<tokio::sync::OnceCell<Option<String>>>,
+    listener_started: std::sync::Once,
+    client: Mutex<Option<Client>>,
 }
 
 impl Bridge {
@@ -82,7 +87,54 @@ impl Bridge {
 
 impl ServerHandler for Bridge {
     fn get_info(&self) -> ServerConfig {
-        server::info()
+        let mut info = server::info();
+        if self.channel_cursor.is_some() {
+            info.capabilities
+                .experimental
+                .get_or_insert_with(Default::default)
+                .insert("claude/channel".into(), Default::default());
+            info = info.with_instructions(format!(
+                "{}\n{}",
+                mcp::tools::INSTRUCTIONS,
+                channel::INSTRUCTIONS
+            ));
+        }
+        info
+    }
+
+    fn supported_protocol_versions(&self) -> std::borrow::Cow<'static, [ProtocolVersion]> {
+        std::borrow::Cow::Borrowed(if self.channel_cursor.is_some() {
+            ProtocolVersion::known_up_to(&ProtocolVersion::V_2025_11_25)
+        } else {
+            ProtocolVersion::KNOWN_VERSIONS
+        })
+    }
+
+    async fn initialize(
+        &self,
+        request: rmcp::model::InitializeRequestParams,
+        context: RequestContext<RoleServer>,
+    ) -> Result<rmcp::model::InitializeResult, ErrorData> {
+        context.peer.set_peer_info(request.clone());
+        let info = self.negotiate_initialize(&request)?;
+        if let Some(cursor) = &self.channel_cursor {
+            cursor
+                .get_or_init(|| channel::initial_cursor(&self.url))
+                .await;
+        }
+        Ok(info)
+    }
+
+    async fn on_initialized(&self, context: NotificationContext<RoleServer>) {
+        if let Some(cursor) = &self.channel_cursor {
+            self.listener_started.call_once(|| {
+                tokio::spawn(channel::listen(
+                    self.url.clone(),
+                    context.peer,
+                    cursor.get().cloned().flatten(),
+                ));
+            });
+        }
     }
 
     async fn list_tools(
@@ -98,7 +150,7 @@ impl ServerHandler for Bridge {
         request: CallToolRequestParams,
         context: RequestContext<RoleServer>,
     ) -> Result<CallToolResponse, ErrorData> {
-        let client = context.peer.peer_info().map(|i| i.client_info.clone());
+        let client = context.client_info();
         let r = match self.forward(request, client).await {
             Ok(mut r) => {
                 // The app may have answered over an older protocol revision (no resultType);
@@ -146,7 +198,12 @@ fn main() -> std::process::ExitCode {
     let r = rt.block_on(async move {
         let bridge = Bridge {
             url,
-            client: Arc::new(Mutex::new(None)),
+            channel_cursor: args
+                .iter()
+                .any(|a| a == "--claude-channel")
+                .then(Default::default),
+            listener_started: Default::default(),
+            client: Mutex::new(None),
         };
         let service = bridge
             .serve(rmcp::transport::stdio())

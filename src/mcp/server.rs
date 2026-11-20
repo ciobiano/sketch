@@ -57,10 +57,9 @@ pub fn to_result(r: ToolResult) -> CallToolResult {
     }
 }
 
-/// The client's display title, else its name, from the MCP handshake.
+/// The client's display title or name, from request metadata or the handshake.
 fn client_name(context: &RequestContext<RoleServer>) -> Option<String> {
-    let info = context.peer.peer_info()?;
-    let c = &info.client_info;
+    let c = context.client_info()?;
     Some(
         c.title
             .clone()
@@ -73,17 +72,42 @@ fn client_name(context: &RequestContext<RoleServer>) -> Option<String> {
 #[derive(Clone)]
 pub struct SketchServer {
     dispatch: Dispatch,
+    mentions: super::mentions::Mentions,
 }
 
 impl SketchServer {
     pub fn new(dispatch: Dispatch) -> SketchServer {
-        SketchServer { dispatch }
+        SketchServer {
+            dispatch,
+            mentions: Default::default(),
+        }
     }
 }
 
 impl ServerHandler for SketchServer {
     fn get_info(&self) -> ServerConfig {
         info()
+    }
+
+    async fn on_custom_request(
+        &self,
+        request: rmcp::model::CustomRequest,
+        _context: RequestContext<RoleServer>,
+    ) -> Result<rmcp::model::CustomResult, ErrorData> {
+        if request.method != super::mentions::WAIT_METHOD {
+            return Err(ErrorData::new(
+                rmcp::model::ErrorCode::METHOD_NOT_FOUND,
+                request.method,
+                None,
+            ));
+        }
+        let cursor = request
+            .params
+            .as_ref()
+            .and_then(|p| p.get("cursor"))
+            .and_then(|v| v.as_str());
+        let batch = self.mentions.wait(cursor).await;
+        Ok(rmcp::model::CustomResult::new(serde_json::json!(batch)))
     }
 
     async fn list_tools(
@@ -143,13 +167,26 @@ async fn fix_accept(
 
 /// The HTTP routes: the MCP endpoint plus a JSON 404 for everything else.
 pub fn router(dispatch: Dispatch, ct: CancellationToken) -> axum::Router {
+    router_with_mentions(dispatch, ct, Default::default())
+}
+
+fn router_with_mentions(
+    dispatch: Dispatch,
+    ct: CancellationToken,
+    mentions: super::mentions::Mentions,
+) -> axum::Router {
     let config = StreamableHttpServerConfig::default()
         .enforce_origin_validation()
         .with_max_request_body_bytes(64 << 20)
         .with_cancellation_token(ct);
     let service: StreamableHttpService<SketchServer, LocalSessionManager> =
         StreamableHttpService::new(
-            move || Ok(SketchServer::new(dispatch.clone())),
+            move || {
+                Ok(SketchServer {
+                    dispatch: dispatch.clone(),
+                    mentions: mentions.clone(),
+                })
+            },
             Default::default(),
             config,
         );
@@ -170,6 +207,7 @@ pub fn router(dispatch: Dispatch, ct: CancellationToken) -> axum::Router {
 /// A running HTTP server; stops when dropped.
 pub struct Running {
     pub port: u16,
+    pub mentions: super::mentions::Mentions,
     ct: CancellationToken,
     thread: Option<std::thread::JoinHandle<()>>,
 }
@@ -210,6 +248,8 @@ pub fn spawn(port: u16, dispatch: Dispatch) -> Result<Running, String> {
     let port = listener.local_addr().map_err(|e| e.to_string())?.port();
     let ct = CancellationToken::new();
     let thread_ct = ct.clone();
+    let mentions = super::mentions::Mentions::default();
+    let server_mentions = mentions.clone();
     let rt = tokio::runtime::Builder::new_multi_thread()
         .worker_threads(2)
         .thread_name("sketch-rs-mcp")
@@ -227,7 +267,7 @@ pub fn spawn(port: u16, dispatch: Dispatch) -> Result<Running, String> {
                         return;
                     }
                 };
-                let app = router(dispatch, thread_ct.child_token());
+                let app = router_with_mentions(dispatch, thread_ct.child_token(), server_mentions);
                 if let Err(e) = axum::serve(listener, app)
                     .with_graceful_shutdown(thread_ct.cancelled_owned())
                     .await
@@ -239,6 +279,7 @@ pub fn spawn(port: u16, dispatch: Dispatch) -> Result<Running, String> {
         .map_err(|e| e.to_string())?;
     Ok(Running {
         port,
+        mentions,
         ct,
         thread: Some(thread),
     })

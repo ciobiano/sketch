@@ -518,6 +518,18 @@ impl App {
         for req in std::mem::take(&mut self.ed.requests) {
             match req {
                 AppRequest::Home => self.go_home(),
+                AppRequest::CommentMention {
+                    thread_id,
+                    message_id,
+                } => {
+                    if let Some((_, server)) = &self.mcp {
+                        server.mentions.publish(crate::mcp::mentions::Mention {
+                            file_id: self.session.project.as_ref().map(|p| p.manifest.id.clone()),
+                            thread_id,
+                            message_id,
+                        });
+                    }
+                }
                 AppRequest::PickAttachments => {
                     if let Some(files) = rfd::FileDialog::new()
                         .set_title("Attach files")
