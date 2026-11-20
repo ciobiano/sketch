@@ -2,7 +2,7 @@
 //! the thread popover (replies, reactions, attachments, @mentions) and the Comments panel.
 
 use crate::comments::{
-    self, Attachment, Author, AuthorKind, Draft, Pin, REACTIONS, Status, Thread,
+    self, Attachment, Author, AuthorKind, Delivery, Draft, Pin, REACTIONS, Status, Thread,
 };
 use crate::editor::{AppRequest, Editor, Tool};
 use crate::geom::V2;
@@ -276,6 +276,7 @@ enum Act {
     Open(std::path::PathBuf),
     Show(String),
     Select(NodeId),
+    SendPending,
     Close,
 }
 
@@ -429,6 +430,7 @@ pub fn canvas(ctx: &egui::Context, ed: &mut Editor, st: &mut CommentsUi, canvas:
         let at = to_screen(t.world_point(&ed.doc), ed);
         popover(ctx, at, canvas, |ui| thread_view(ui, ed, st, &t, &mut acts));
     }
+    send_bar(ctx, ed, canvas, &mut acts);
     if (st.new.is_some() || st.open.is_some()) && ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
         acts.push(Act::Close);
     }
@@ -1308,22 +1310,180 @@ fn send_button(ui: &mut Ui, ready: bool) -> egui::Response {
     resp.on_hover_text("Send (Return)")
 }
 
-fn notify_mention(ed: &mut Editor, thread_id: &str) {
-    if let Some(message) = ed
-        .comments
-        .thread(thread_id)
-        .and_then(|t| t.messages.last())
-        && message
-            .mentions
-            .iter()
-            .any(|id| id == comments::ANY_AGENT || id.starts_with("agent:"))
-    {
-        ed.requests.push(AppRequest::CommentMention {
-            recipients: message.mentions.clone(),
+/// Agent ids as names people read: "Claude Code", "any agent".
+fn agent_names(ed: &Editor, ids: &[String]) -> String {
+    let names: Vec<&str> = ids
+        .iter()
+        .map(|id| {
+            if id == comments::ANY_AGENT {
+                "any agent"
+            } else {
+                ed.comments.name(id)
+            }
+        })
+        .collect();
+    match names.as_slice() {
+        [] => "agents".into(),
+        [one] => (*one).into(),
+        [rest @ .., last] => format!("{} and {last}", rest.join(", ")),
+    }
+}
+
+/// The agents the waiting comments are for.
+fn pending_recipients(ed: &Editor) -> Vec<String> {
+    let mut who: Vec<String> = Vec::new();
+    for (t, m) in ed.comments.pending() {
+        if let Some(th) = ed.comments.thread(&t)
+            && let Some(i) = th.messages.iter().position(|x| x.id == m)
+        {
+            for r in th.agent_recipients(i) {
+                if !who.contains(&r) {
+                    who.push(r);
+                }
+            }
+        }
+    }
+    who
+}
+
+/// The person just posted the last message in `thread_id`. If it is for agents, hand it
+/// over now ([`Delivery::Auto`]) or keep it until they press Send ([`Delivery::Hold`]).
+fn route(ed: &mut Editor, thread_id: &str) {
+    let Some(t) = ed.comments.thread(thread_id) else {
+        return;
+    };
+    let Some(i) = t.messages.len().checked_sub(1) else {
+        return;
+    };
+    let recipients = t.agent_recipients(i);
+    if recipients.is_empty() {
+        return;
+    }
+    let message_id = t.messages[i].id.clone();
+    match ed.delivery {
+        Delivery::Auto => ed.requests.push(AppRequest::CommentMention {
+            recipients,
             thread_id: thread_id.to_owned(),
-            message_id: message.id.clone(),
+            message_id,
+            also: Vec::new(),
+        }),
+        Delivery::Hold => {
+            ed.comments.set_pending(thread_id, &message_id, true);
+            ed.status = format!(
+                "Kept for {} until you press Send",
+                agent_names(ed, &recipients)
+            );
+        }
+    }
+}
+
+/// Send every waiting comment: one message per set of recipients, listing all of theirs.
+/// Returns how many went out. With no agent listening they stay put.
+fn send_pending(ed: &mut Editor) -> Result<usize, String> {
+    let pending = ed.comments.pending();
+    if pending.is_empty() {
+        return Ok(0);
+    }
+    if ed.comments.connected_agents.is_empty() {
+        return Err(
+            "No agent is listening, so the comments are still waiting. Start your \
+                    agent with the Sketch channel, or ask it to check the Sketch comments."
+                .into(),
+        );
+    }
+    // (recipients, the (thread, message) ids for them)
+    type Group = (Vec<String>, Vec<(String, String)>);
+    let mut groups: Vec<Group> = Vec::new();
+    for (t, m) in &pending {
+        let Some(i) = ed
+            .comments
+            .thread(t)
+            .and_then(|th| th.messages.iter().position(|x| x.id == *m))
+        else {
+            continue;
+        };
+        let mut r = ed.comments.thread(t).unwrap().agent_recipients(i);
+        r.sort();
+        let item = (t.clone(), m.clone());
+        match groups.iter_mut().find(|(k, _)| *k == r) {
+            Some((_, v)) => v.push(item),
+            None => groups.push((r, vec![item])),
+        }
+    }
+    for (recipients, mut items) in groups {
+        if recipients.is_empty() {
+            continue;
+        }
+        let (thread_id, message_id) = items.remove(0);
+        ed.requests.push(AppRequest::CommentMention {
+            recipients,
+            thread_id,
+            message_id,
+            also: items,
         });
     }
+    for (t, m) in &pending {
+        ed.comments.set_pending(t, m, false);
+    }
+    Ok(pending.len())
+}
+
+/// "3 comments waiting for Claude Code · Send", over the top of the canvas while comments
+/// are held back.
+fn send_bar(ctx: &egui::Context, ed: &Editor, canvas: Rect, acts: &mut Vec<Act>) {
+    let n = ed.comments.pending().len();
+    if n == 0 {
+        return;
+    }
+    let who = agent_names(ed, &pending_recipients(ed));
+    egui::Area::new(Id::new("comment-send-bar"))
+        .order(Order::Foreground)
+        .pivot(Align2::CENTER_TOP)
+        .fixed_pos(pos2(canvas.center().x, canvas.top() + 12.0))
+        .show(ctx, |ui| {
+            let p = theme::pal(ui);
+            egui::Frame::NONE
+                .fill(p.popover)
+                .stroke(Stroke::new(1.0, p.separator))
+                .shadow(shadow())
+                .corner_radius(18.0)
+                .inner_margin(egui::Margin {
+                    left: 14,
+                    right: 5,
+                    top: 5,
+                    bottom: 5,
+                })
+                .show(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.spacing_mut().item_spacing.x = 8.0;
+                        let (r, _) = ui.allocate_exact_size(vec2(8.0, 8.0), Sense::hover());
+                        ui.painter().circle_filled(r.center(), 4.0, theme::accent());
+                        ui.label(
+                            RichText::new(format!(
+                                "{} waiting for {who}",
+                                plural(n, "comment", "comments")
+                            ))
+                            .font(theme::medium(theme::BODY)),
+                        );
+                        let send = egui::Button::new(
+                            RichText::new("Send")
+                                .font(theme::semibold(theme::BODY))
+                                .color(Color32::WHITE),
+                        )
+                        .fill(theme::accent())
+                        .stroke(Stroke::NONE)
+                        .corner_radius(13.0)
+                        .min_size(vec2(64.0, 26.0));
+                        if ui
+                            .add(send)
+                            .on_hover_text("Send them all to the agent now, as one message")
+                            .clicked()
+                        {
+                            acts.push(Act::SendPending);
+                        }
+                    });
+                });
+        });
 }
 
 fn apply(ed: &mut Editor, st: &mut CommentsUi, acts: Vec<Act>) {
@@ -1340,6 +1500,12 @@ fn apply(ed: &mut Editor, st: &mut CommentsUi, acts: Vec<Act>) {
                 st.show(ed, &id);
                 Ok(())
             }
+            Act::SendPending => send_pending(ed).map(|n| {
+                if n > 0 {
+                    changed = true;
+                    ed.status = format!("Sent {} to the agent", plural(n, "comment", "comments"));
+                }
+            }),
             Act::Select(id) => {
                 ed.selection = vec![id];
                 ed.revision += 1;
@@ -1349,7 +1515,7 @@ fn apply(ed: &mut Editor, st: &mut CommentsUi, acts: Vec<Act>) {
                 if let Some(mut n) = st.new.take() {
                     let draft = n.composer.take();
                     let id = ed.comments.add_thread(&me, &n.pin, draft, &ed.doc, now);
-                    notify_mention(ed, &id);
+                    route(ed, &id);
                     st.open = Some(id);
                     st.focus = true;
                     changed = true;
@@ -1361,7 +1527,7 @@ fn apply(ed: &mut Editor, st: &mut CommentsUi, acts: Vec<Act>) {
                 changed = true;
                 ed.comments
                     .reply(&t, &me, draft, now)
-                    .map(|_| notify_mention(ed, &t))
+                    .map(|_| route(ed, &t))
             }
             Act::React(t, m, e) => {
                 changed = true;
@@ -1480,6 +1646,52 @@ pub fn panel(ui: &mut Ui, ed: &mut Editor, st: &mut CommentsUi) {
             }
         });
     });
+    ui.add_space(6.0);
+    ui.label(
+        RichText::new("Send comments to agents")
+            .color(p.secondary)
+            .size(theme::SECONDARY),
+    );
+    ui.horizontal(|ui| {
+        let mut d = ed.delivery;
+        segmented(
+            ui,
+            &mut d,
+            &[
+                (Delivery::Hold, "When I send".into()),
+                (Delivery::Auto, "Right away".into()),
+            ],
+        );
+        if d != ed.delivery {
+            ed.delivery = d;
+            comments::save_local_delivery(d);
+        }
+    });
+    ui.label(
+        RichText::new(match ed.delivery {
+            Delivery::Hold => {
+                "Comments for agents wait until you press Send, so you can leave several first."
+            }
+            Delivery::Auto => {
+                "Each comment reaches the agent as you post it, and replies in its threads keep the conversation going."
+            }
+        })
+        .color(p.tertiary)
+        .size(theme::SECONDARY),
+    );
+    let pending = ed.comments.pending().len();
+    if pending > 0
+        && ui
+            .button(format!(
+                "Send {} to {}",
+                plural(pending, "comment", "comments"),
+                agent_names(ed, &pending_recipients(ed))
+            ))
+            .clicked()
+    {
+        let mut acts = vec![Act::SendPending];
+        apply(ed, st, std::mem::take(&mut acts));
+    }
     ui.add_space(6.0);
     let mut threads: Vec<(usize, &Thread)> = ed
         .comments
@@ -1665,6 +1877,8 @@ fn card(
                     if resolved {
                         let (r, _) = ui.allocate_exact_size(vec2(14.0, 14.0), Sense::hover());
                         theme::paint_icon(ui.painter(), r, Icon::Check, p.secondary);
+                    } else if t.messages.iter().any(|m| m.pending) {
+                        tag(ui, "Not sent", theme::accent());
                     } else if st.has_draft(&t.id) {
                         tag(ui, "Draft", p.secondary);
                     }
@@ -1753,52 +1967,122 @@ pub fn reveal(ed: &mut Editor, st: &mut CommentsUi, page: usize, id: &str) {
 mod tests {
     use super::*;
 
+    /// The requests a test editor has queued for the app, as (recipients, message ids).
+    fn sent(ed: &mut Editor) -> Vec<(Vec<String>, Vec<String>)> {
+        std::mem::take(&mut ed.requests)
+            .into_iter()
+            .filter_map(|r| match r {
+                AppRequest::CommentMention {
+                    recipients,
+                    message_id,
+                    also,
+                    ..
+                } => Some((
+                    recipients,
+                    std::iter::once(message_id)
+                        .chain(also.into_iter().map(|(_, m)| m))
+                        .collect(),
+                )),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn post(ed: &mut Editor, st: &mut CommentsUi, text: &str) -> String {
+        st.start(ed, None, crate::geom::v2(1.0, 2.0));
+        st.new.as_mut().unwrap().composer.text = text.into();
+        apply(ed, st, vec![Act::Post]);
+        st.open.clone().unwrap()
+    }
+
+    fn reply(ed: &mut Editor, st: &mut CommentsUi, thread: &str, text: &str) -> String {
+        st.reply.text = text.into();
+        apply(ed, st, vec![Act::Reply(thread.into())]);
+        ed.comments
+            .thread(thread)
+            .unwrap()
+            .messages
+            .last()
+            .unwrap()
+            .id
+            .clone()
+    }
+
     #[test]
-    fn only_new_local_agent_mentions_notify_the_channel() {
+    fn right_away_sends_each_comment_and_keeps_the_conversation_going() {
         let mut ed = Editor::default();
+        ed.delivery = Delivery::Auto;
         let mut st = CommentsUi::default();
-        st.start(&mut ed, None, crate::geom::v2(1.0, 2.0));
-        st.new.as_mut().unwrap().composer.text = "@Claude Code check the title".into();
-        apply(&mut ed, &mut st, vec![Act::Post]);
-        let thread = st.open.clone().unwrap();
-        let event = |message_id: &String, recipient: &str| AppRequest::CommentMention {
-            recipients: vec![recipient.to_owned()],
-            thread_id: thread.clone(),
-            message_id: message_id.clone(),
-        };
+        let thread = post(&mut ed, &mut st, "@Claude Code check the title");
+        let first = ed.comments.thread(&thread).unwrap().messages[0].id.clone();
         assert_eq!(
-            ed.requests.pop(),
-            Some(event(
-                &ed.comments.thread(&thread).unwrap().messages[0].id,
-                comments::CLAUDE_CODE
-            ))
+            sent(&mut ed),
+            vec![(vec![comments::CLAUDE_CODE.to_string()], vec![first])]
         );
-        st.reply.text = "plain reply".into();
-        apply(&mut ed, &mut st, vec![Act::Reply(thread.clone())]);
-        assert!(ed.requests.is_empty());
-        st.reply.text = "another look @agent".into();
-        apply(&mut ed, &mut st, vec![Act::Reply(thread.clone())]);
+        // A plain reply in a thread with an agent in it goes to that agent: no new @.
+        let follow_up = reply(&mut ed, &mut st, &thread, "bigger, please");
         assert_eq!(
-            ed.requests.pop(),
-            Some(event(
-                &ed.comments.thread(&thread).unwrap().messages[2].id,
-                comments::ANY_AGENT
-            ))
+            sent(&mut ed),
+            vec![(vec![comments::CLAUDE_CODE.to_string()], vec![follow_up])]
         );
-        st.reply.text = "@Codex only".into();
+        // Naming an agent sends to exactly that agent.
         ed.comments
             .connected_agents
             .push(Author::agent(Some("Codex")));
-        apply(
-            &mut ed,
-            &mut st,
-            vec![Act::Reply(thread.clone()), Act::Close, Act::Show(thread)],
-        );
+        let codex = reply(&mut ed, &mut st, &thread, "@Codex only");
         assert_eq!(
-            ed.requests.len(),
-            1,
-            "a named Codex mention must be delivered"
+            sent(&mut ed),
+            vec![(vec!["agent:codex".to_string()], vec![codex])]
         );
+        // A thread with no agent in it sends nothing.
+        let people = post(&mut ed, &mut st, "note to self");
+        reply(&mut ed, &mut st, &people, "still a note");
+        assert!(sent(&mut ed).is_empty());
+        assert!(ed.comments.pending().is_empty());
+    }
+
+    #[test]
+    fn when_i_send_holds_comments_until_send() {
+        let mut ed = Editor::default();
+        assert_eq!(ed.delivery, Delivery::Hold, "holding is the default");
+        let mut st = CommentsUi::default();
+        // Comments on three frames: nothing goes out yet.
+        let a = post(&mut ed, &mut st, "@Claude Code tighten the header");
+        let b = post(&mut ed, &mut st, "@Claude Code darker button");
+        let c = post(&mut ed, &mut st, "@agent swap the icon");
+        post(&mut ed, &mut st, "no agent here");
+        assert!(sent(&mut ed).is_empty());
+        assert_eq!(ed.comments.pending().len(), 3);
+        // With nobody listening, Send keeps them and says why.
+        apply(&mut ed, &mut st, vec![Act::SendPending]);
+        assert!(sent(&mut ed).is_empty());
+        assert_eq!(ed.comments.pending().len(), 3);
+        assert!(ed.status.contains("No agent is listening"), "{}", ed.status);
+        // Send: one message per set of recipients, in the order they were written.
+        ed.comments
+            .connected_agents
+            .push(Author::agent(Some("claude-code")));
+        apply(&mut ed, &mut st, vec![Act::SendPending]);
+        let mut out = sent(&mut ed);
+        let first = |t: &str| ed.comments.thread(t).unwrap().messages[0].id.clone();
+        out.sort();
+        let mut want = vec![
+            (vec!["agent".to_string()], vec![first(&c)]),
+            (
+                vec![comments::CLAUDE_CODE.to_string()],
+                vec![first(&a), first(&b)],
+            ),
+        ];
+        want.sort();
+        assert_eq!(out, want);
+        assert!(ed.comments.pending().is_empty());
+        // Replies in an agent's thread wait for Send too.
+        reply(&mut ed, &mut st, &a, "and the logo");
+        assert!(sent(&mut ed).is_empty());
+        assert_eq!(ed.comments.pending().len(), 1);
+        // If the agent picks the thread up itself, it is no longer waiting.
+        assert!(ed.comments.clear_pending(&a));
+        assert!(ed.comments.pending().is_empty());
     }
 
     #[test]

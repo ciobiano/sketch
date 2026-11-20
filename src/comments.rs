@@ -159,6 +159,24 @@ pub struct Message {
     /// Author ids mentioned in the text, plus [`ANY_AGENT`] for `@agent`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub mentions: Vec<String>,
+    /// For agents, and waiting until the person sends it ([`Delivery::Hold`]).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub pending: bool,
+}
+
+/// When comments addressed to agents reach them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Delivery {
+    /// Collect them; the person sends them all at once (or tells the agent to look).
+    #[default]
+    Hold,
+    /// Send each one as it is posted, replies in an agent's thread included.
+    Auto,
+}
+
+fn is_agent(id: &str) -> bool {
+    id == ANY_AGENT || id.starts_with("agent:")
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -221,6 +239,37 @@ impl Thread {
             .iter()
             .any(|m| m.mentions.iter().any(|x| x == id))
     }
+
+    /// The agents message `i` is for. A message that @mentions agents goes to exactly
+    /// those. Otherwise a person's reply goes to the agents already in the conversation
+    /// (who wrote in it or were mentioned in it), so a back-and-forth needs no new @.
+    /// Agents' own messages go to nobody.
+    pub fn agent_recipients(&self, i: usize) -> Vec<String> {
+        let Some(m) = self.messages.get(i) else {
+            return Vec::new();
+        };
+        if is_agent(&m.author) {
+            return Vec::new();
+        }
+        let named: Vec<String> = m
+            .mentions
+            .iter()
+            .filter(|id| is_agent(id))
+            .cloned()
+            .collect();
+        if !named.is_empty() {
+            return named;
+        }
+        let mut v: Vec<String> = Vec::new();
+        for e in &self.messages[..i] {
+            for id in std::iter::once(&e.author).chain(&e.mentions) {
+                if is_agent(id) && !v.contains(id) {
+                    v.push(id.clone());
+                }
+            }
+        }
+        v
+    }
 }
 
 /// Where a new thread goes.
@@ -277,6 +326,48 @@ pub struct Comments {
 impl Comments {
     pub fn is_empty(&self) -> bool {
         self.threads.is_empty() && self.authors.is_empty()
+    }
+
+    /// Messages waiting to be sent to agents, as (thread id, message id), oldest first.
+    pub fn pending(&self) -> Vec<(String, String)> {
+        // Ties (same millisecond) keep the order the comments were written in.
+        let mut v: Vec<(u64, usize, usize, String, String)> = self
+            .threads
+            .iter()
+            .enumerate()
+            .flat_map(|(ti, t)| {
+                t.messages
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, m)| m.pending)
+                    .map(move |(mi, m)| (m.created, ti, mi, t.id.clone(), m.id.clone()))
+            })
+            .collect();
+        v.sort();
+        v.into_iter().map(|(.., t, m)| (t, m)).collect()
+    }
+
+    /// Mark a message as waiting to be sent, or as sent.
+    pub fn set_pending(&mut self, thread: &str, message: &str, on: bool) {
+        if let Ok(t) = self.thread_mut(thread)
+            && let Some(m) = t.messages.iter_mut().find(|m| m.id == message)
+        {
+            m.pending = on;
+        }
+    }
+
+    /// An agent picked the thread up: nothing in it is waiting any more. Returns whether
+    /// anything changed.
+    pub fn clear_pending(&mut self, thread: &str) -> bool {
+        let Ok(t) = self.thread_mut(thread) else {
+            return false;
+        };
+        let mut changed = false;
+        for m in t.messages.iter_mut().filter(|m| m.pending) {
+            m.pending = false;
+            changed = true;
+        }
+        changed
     }
 
     pub fn thread(&self, id: &str) -> Option<&Thread> {
@@ -342,6 +433,7 @@ impl Comments {
             edited: None,
             reactions: BTreeMap::new(),
             attachments: draft.attachments,
+            pending: false,
         }
     }
 
@@ -701,6 +793,25 @@ pub fn save_local_author(a: &Author) {
     if let Some(p) = author_file() {
         let _ = std::fs::create_dir_all(p.parent().unwrap());
         let _ = std::fs::write(p, serde_json::to_string_pretty(a).unwrap_or_default());
+    }
+}
+
+fn delivery_file() -> Option<PathBuf> {
+    dirs::config_dir().map(|d| d.join("sketch-rs").join("comment-delivery.json"))
+}
+
+/// When this Mac's comments reach agents. Holding them is the default.
+pub fn local_delivery() -> Delivery {
+    delivery_file()
+        .and_then(|p| std::fs::read_to_string(p).ok())
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_default()
+}
+
+pub fn save_local_delivery(d: Delivery) {
+    if let Some(p) = delivery_file() {
+        let _ = std::fs::create_dir_all(p.parent().unwrap());
+        let _ = std::fs::write(p, serde_json::to_string(&d).unwrap_or_default());
     }
 }
 

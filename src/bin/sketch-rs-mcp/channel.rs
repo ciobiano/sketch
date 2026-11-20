@@ -11,9 +11,10 @@ use sketch_rs::mcp::mentions::{Batch, Mention, WAIT_METHOD};
 use std::{process::Stdio, time::Duration};
 use tokio::io::AsyncWriteExt;
 
-pub const INSTRUCTIONS: &str = "A channel event means the person in Sketch just mentioned you. \
-Read the indicated message with get_comment_thread using commentThreadId and fileId when present. \
-Use that fileId for follow-up calls and reply on the same thread.";
+pub const INSTRUCTIONS: &str = "A channel event means the person in Sketch sent you a comment, \
+or several at once (the event then lists each commentThreadId). Read each with \
+get_comment_thread using its commentThreadId and the fileId when present, do the work, and \
+reply on the same thread. Use that fileId for follow-up calls.";
 
 type Error = Box<dyn std::error::Error + Send + Sync>;
 
@@ -42,9 +43,7 @@ impl Destination {
             Self::Claude(peer) => {
                 let event = CustomNotification::new(
                     "notifications/claude/channel",
-                    Some(json!({
-                        "content": "You were mentioned in a Sketch comment.", "meta": mention
-                    })),
+                    Some(json!({ "content": content(mention), "meta": meta(mention) })),
                 );
                 peer.send_notification(ServerNotification::CustomNotification(event))
                     .await?;
@@ -68,6 +67,40 @@ impl Destination {
         }
         Ok(())
     }
+}
+
+/// What Claude Code reads: one comment, or the list the person sent together.
+fn content(m: &Mention) -> String {
+    if m.also.is_empty() {
+        return "You were mentioned in a Sketch comment.".into();
+    }
+    let mut s = format!(
+        "The person in Sketch sent you {} comments together. Work through each one: read it \
+         with get_comment_thread, make the change, then reply in its thread.",
+        m.also.len() + 1
+    );
+    let all = std::iter::once((&m.thread_id, &m.message_id))
+        .chain(m.also.iter().map(|r| (&r.thread_id, &r.message_id)));
+    for (i, (t, msg)) in all.enumerate() {
+        s.push_str(&format!(
+            "\n{}. commentThreadId {t}, messageId {msg}",
+            i + 1
+        ));
+    }
+    s
+}
+
+/// Channel metadata. Claude Code accepts only string values, so a batch adds a count rather
+/// than its list (the list is in the content).
+fn meta(m: &Mention) -> serde_json::Value {
+    let mut v = json!({ "commentThreadId": m.thread_id, "messageId": m.message_id });
+    if let Some(f) = &m.file_id {
+        v["fileId"] = json!(f);
+    }
+    if !m.also.is_empty() {
+        v["count"] = json!((m.also.len() + 1).to_string());
+    }
+    v
 }
 
 // Establish the cursor before the Claude stdio handshake completes.

@@ -217,6 +217,16 @@ comment under their own name.
 
 ### Deliver mentions to a running agent
 
+The Comments tab decides when comments for agents go out. **When I send** (the default) keeps
+them: leave comments on as many frames as you like, then press Send on the bar at the top of
+the canvas, and the agent gets them all in one message. Held comments show "Not sent" in the
+Comments tab, and nothing is lost if you quit first. If you tell the agent in chat to look
+instead, a thread stops waiting as soon as the agent reads, answers, reacts to or resolves
+it. **Right away** sends each comment as you post it. In either mode, a reply in a thread that
+already has an agent in it goes to that agent without a new @, so you can go back and forth
+in the thread. A reply that names agents goes to exactly those agents. Send needs a
+connected listener; without one the comments stay waiting.
+
 Run one listener per receiving conversation. Its name appears in the Sketch comment picker while it is connected. A named mention goes to listeners with that name. During testing, `@agent` reaches every listener. Two sessions registered under the same name both receive its mentions.
 
 Build the app and bridge with `cargo build --bins`. For a Codex conversation in T3 Code, run this in the foreground with the ID of the conversation you want to receive comments:
@@ -248,7 +258,7 @@ claude --dangerously-load-development-channels server:sketch-mentions
 
 Claude Code asks you to confirm the custom development channel. If Sketch uses a custom port, set `SKETCH_RS_MCP_PORT` to the same value when starting Sketch and Claude Code.
 
-Post a new comment or reply containing `@Claude Code` or `@agent`. Each addressed session receives the project, thread and message IDs and can read the feedback and reply in Sketch. You can mention Claude Code before its first reply. Opening a saved project or posting a reply through MCP sends no event. Comments posted while the channel is offline are still available through `list_comment_threads`.
+Post a new comment or reply containing `@Claude Code` or `@agent` (and press Send, unless the Comments tab is set to Right away). Each addressed session receives the project, thread and message IDs and can read the feedback and reply in Sketch. Comments sent together arrive as one message that lists every thread. You can mention Claude Code before its first reply. Opening a saved project or posting a reply through MCP sends no event. Comments posted while the channel is offline are still available through `list_comment_threads`.
 
 Claude documents the startup flag and organization settings in its [channels reference](https://code.claude.com/docs/en/channels-reference).
 

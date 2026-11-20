@@ -465,6 +465,11 @@ fn comments_ui_states() {
     st.comments.close(&e);
     st.show_comments = true;
     shot("6-panel", &mut e, &mut st, None);
+    // Held back for the agent: the Send bar and the "Not sent" card.
+    let m = e.comments.thread(&t1).unwrap().messages[0].id.clone();
+    e.comments.set_pending(&t1, &m, true);
+    shot("7-held", &mut e, &mut st, None);
+    e.comments.set_pending(&t1, &m, false);
 }
 
 /// With the Comment tool a click pins a comment and a drag moves the canvas.

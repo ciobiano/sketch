@@ -130,10 +130,13 @@ pub enum AppRequest {
     ImageFill(Vec<NodeId>, usize),
     /// Pick files to attach to the comment being written (into `Editor::picked_files`).
     PickAttachments,
+    /// Hand a comment (and any sent with it, as thread and message ids) to the agents in
+    /// `recipients`.
     CommentMention {
         recipients: Vec<String>,
         thread_id: String,
         message_id: String,
+        also: Vec<(String, String)>,
     },
     /// Open a file (a comment attachment) in its default app.
     OpenFile(PathBuf),
@@ -275,6 +278,8 @@ pub struct Editor {
     pub comments: crate::comments::Comments,
     /// Who comments from this app: set from [`crate::comments::local_author`] by the app.
     pub me: crate::comments::Author,
+    /// When comments for agents reach them: set from [`crate::comments::local_delivery`].
+    pub delivery: crate::comments::Delivery,
     /// Folder of the open project (attachments are copied into it), None for scratch work.
     pub project_dir: Option<PathBuf>,
     /// Files the user picked to attach to the comment being written.
@@ -357,6 +362,7 @@ impl Editor {
             tokens: crate::tokens::Tokens::default(),
             comments: crate::comments::Comments::default(),
             me: crate::comments::Author::person("me", "Me"),
+            delivery: crate::comments::Delivery::default(),
             project_dir: None,
             picked_files: Vec::new(),
             layout_suspended: Vec::new(),

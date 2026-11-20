@@ -28,6 +28,18 @@ pub struct Mention {
     #[serde(rename = "commentThreadId")]
     pub thread_id: String,
     pub message_id: String,
+    /// Comments the person sent along with this one, in order.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub also: Vec<MentionRef>,
+}
+
+/// Another comment in the same send.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MentionRef {
+    #[serde(rename = "commentThreadId")]
+    pub thread_id: String,
+    pub message_id: String,
 }
 
 #[derive(Serialize, Deserialize)]
