@@ -568,9 +568,47 @@ fn covers(short: &str, long: &str) -> bool {
         }
 }
 
-/// Setting `a` also sets (part of) `b`, or the other way round.
-fn overlaps(a: &str, b: &str) -> bool {
+/// Setting `a` also sets (part of) `b`, or the other way round. `fill` is an alias of
+/// `backgroundColor` in `css::apply`.
+pub fn overlaps(a: &str, b: &str) -> bool {
+    let canon = |p| if p == "fill" { "backgroundColor" } else { p };
+    let (a, b) = (canon(a), canon(b));
     a == b || covers(a, b) || covers(b, a)
+}
+
+/// The token link that sets all of `prop` (camelCase CSS) on a layer, if any: on `prop`
+/// itself or on a shorthand that includes it.
+pub fn link_for<'a>(
+    refs: &'a std::collections::BTreeMap<String, TokenRef>,
+    prop: &str,
+) -> Option<(&'a String, &'a TokenRef)> {
+    let canon = |p: &str| {
+        if p == "fill" {
+            "backgroundColor".to_string()
+        } else {
+            p.to_string()
+        }
+    };
+    let prop = canon(prop);
+    refs.iter()
+        .find(|(k, _)| canon(k) == prop || covers(k, &prop))
+}
+
+/// Drop the token links that set `prop`, keeping the values they applied. Returns whether
+/// any link was removed.
+pub fn unlink(refs: &mut std::collections::BTreeMap<String, TokenRef>, prop: &str) -> bool {
+    let before = refs.len();
+    refs.retain(|k, _| !overlaps(k, prop));
+    refs.len() != before
+}
+
+/// What a linked field shows: the token name for a plain `var(--name)`, otherwise the
+/// value as written.
+pub fn link_label(r: &TokenRef) -> String {
+    match vars(r.raw.trim()).as_slice() {
+        [(0, end, name, None)] if *end == r.raw.trim().len() => name.clone(),
+        _ => r.raw.clone(),
+    }
 }
 
 /// Resolve `var()` in `styles` against the active scope, recording or clearing each

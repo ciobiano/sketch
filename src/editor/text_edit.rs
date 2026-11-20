@@ -252,6 +252,16 @@ impl Editor {
             if probe.underline.is_some() || probe.strike.is_some() {
                 n.text_style.apply_range(0, len, &f);
             }
+            // A whole-layer value set by hand replaces any design token link on it.
+            for (set, prop) in [
+                (probe.color.is_some(), "color"),
+                (probe.size.is_some(), "fontSize"),
+                (probe.bold.is_some(), "fontWeight"),
+            ] {
+                if set {
+                    crate::tokens::unlink(&mut n.tokens, prop);
+                }
+            }
             n.text_style.normalize();
             self.fit_text(*id);
         }
