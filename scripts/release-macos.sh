@@ -2,12 +2,16 @@
 # Build a universal (Apple Silicon + Intel) Sketch.app, sign it with a Developer ID certificate and
 # the hardened runtime, notarize and staple it, then package it as Sketch.dmg, itself signed,
 # notarized and stapled, with the app icon as its volume icon. That file name is the release asset
-# the download page links to. Next to it go Sketch-<version>.zip, the app alone, and appcast.xml,
+# the download page links to. Next to it go Sketch-<build>.zip, the app alone, and appcast.xml,
 # the signed update feed that points installed copies at that zip. Everything is written to
 # <cargo target dir>/universal-apple-darwin/release once every step has passed; a failed run
-# leaves the previous build's files there. Upload all three to a release tagged v<version> (the
-# script prints the command). Bump the version in Cargo.toml and packaging/macos/Info.plist first,
-# since installed copies only offer a version higher than their own.
+# leaves the previous build's files there. Upload all three to a release tagged v<build> (the
+# script prints the command).
+#
+# The app has a version, CFBundleShortVersionString, which must match Cargo.toml, and a build,
+# CFBundleVersion, shown in brackets in About, e.g. 0.1.2 (0.1.3). Installed copies only offer a
+# build higher than their own, so raise CFBundleVersion in packaging/macos/Info.plist for every
+# release; change the version only when you want the name people see to change.
 #
 # The app holds sketch-rs-mcp, the MCP stdio bridge, next to sketch-rs. Its icon is rendered from
 # site/scripts/brand/icon.svg.
@@ -70,12 +74,16 @@ fi
 
 plist=packaging/macos/Info.plist
 version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
-for key in CFBundleShortVersionString CFBundleVersion; do
-  if [ "$(plutil -extract "$key" raw "$plist")" != "$version" ]; then
-    echo "$key in $plist isn't $version, the version in Cargo.toml" >&2
-    exit 1
-  fi
-done
+if [ "$(plutil -extract CFBundleShortVersionString raw "$plist")" != "$version" ]; then
+  echo "CFBundleShortVersionString in $plist isn't $version, the version in Cargo.toml" >&2
+  exit 1
+fi
+build=$(plutil -extract CFBundleVersion raw "$plist")
+if [ "$build" = "$version" ]; then
+  label=$version
+else
+  label="$version ($build)"
+fi
 min_macos=$(plutil -extract LSMinimumSystemVersion raw "$plist")
 # Build for the oldest macOS the app supports rather than the compiler's default.
 export MACOSX_DEPLOYMENT_TARGET=$min_macos
@@ -215,7 +223,7 @@ codesign --verify --deep --strict "$tmp/copied/Sketch.app"
 [ "$notarize" = 0 ] || spctl --assess --type execute "$tmp/copied/Sketch.app"
 
 # ditto keeps the signature and the stapled ticket; plain zip does not.
-zip=$work/Sketch-$version.zip
+zip=$work/Sketch-$build.zip
 ditto -c -k --keepParent "$app" "$zip"
 [ "$appcast" = 1 ] || { finish; exit 0; }
 
@@ -234,13 +242,13 @@ cat > "$appcast" <<XML
     <title>Sketch</title>
     <link>$repo</link>
     <item>
-      <title>Sketch $version</title>
+      <title>Sketch $label</title>
       <pubDate>$(LC_ALL=C date -u '+%a, %d %b %Y %H:%M:%S +0000')</pubDate>
-      <sparkle:version>$version</sparkle:version>
+      <sparkle:version>$build</sparkle:version>
       <sparkle:shortVersionString>$version</sparkle:shortVersionString>
       <sparkle:minimumSystemVersion>$min_macos</sparkle:minimumSystemVersion>
-      <sparkle:fullReleaseNotesLink>$repo/releases/tag/v$version</sparkle:fullReleaseNotesLink>
-      <enclosure url="$repo/releases/download/v$version/$(basename "$zip")" type="application/octet-stream" $enclosure/>
+      <sparkle:fullReleaseNotesLink>$repo/releases/tag/v$build</sparkle:fullReleaseNotesLink>
+      <enclosure url="$repo/releases/download/v$build/$(basename "$zip")" type="application/octet-stream" $enclosure/>
     </item>
   </channel>
 </rss>
@@ -250,4 +258,4 @@ XML
 "$sparkle/bin/sign_update" --ed-key-file "$key_file" --verify "$appcast"
 rm -f "$key_file"
 finish
-echo "publish with: gh release create v$version --repo ${repo#https://github.com/} $out/Sketch.dmg $out/$(basename "$zip") $out/appcast.xml"
+echo "publish with: gh release create v$build --repo ${repo#https://github.com/} --title \"Sketch $label\" $out/Sketch.dmg $out/$(basename "$zip") $out/appcast.xml"

@@ -47,6 +47,8 @@ impl Session {
         let pages = p.load_pages()?;
         ed.open_pages(pages, p.manifest.active_page.as_deref());
         ed.tokens = p.manifest.tokens.clone();
+        ed.comments = p.manifest.comments.clone();
+        ed.project_dir = Some(p.dir.clone());
         // Freshly loaded pages are saved by definition.
         for i in 0..ed.pages.len() {
             ed.mark_page_saved(i);
@@ -118,6 +120,11 @@ impl Session {
         let wrote = !dirty.is_empty() || ed.meta_dirty;
         p.manifest.pages = pages;
         p.manifest.tokens = ed.tokens.clone();
+        // Threads of deleted pages go with them.
+        let ids: Vec<&str> = ed.pages.iter().map(|s| s.id.as_str()).collect();
+        let gone = ed.comments.retain_pages(&ids);
+        crate::comments::remove_files(&p.dir, &gone);
+        p.manifest.comments = ed.comments.clone();
         p.manifest.active_page = Some(ed.active_page_id().to_string());
         if wrote {
             p.manifest.modified = now_ms();
@@ -171,6 +178,7 @@ impl Session {
     pub fn close(&mut self, ed: &mut Editor) -> Result<(), FormatError> {
         let r = self.save_all(ed);
         self.project = None;
+        ed.project_dir = None;
         self.dirty_since = None;
         r
     }

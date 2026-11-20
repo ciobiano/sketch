@@ -41,10 +41,12 @@ pub enum Tool {
     Pencil,
     Eraser,
     Laser,
+    /// Pin a comment thread to a layer or a spot on the page.
+    Comment,
 }
 
 impl Tool {
-    pub const ALL: [Tool; 16] = [
+    pub const ALL: [Tool; 17] = [
         Tool::Select,
         Tool::Hand,
         Tool::Frame,
@@ -61,6 +63,7 @@ impl Tool {
         Tool::Pencil,
         Tool::Eraser,
         Tool::Laser,
+        Tool::Comment,
     ];
     pub fn label(self) -> &'static str {
         match self {
@@ -80,6 +83,7 @@ impl Tool {
             Tool::Pencil => "Pencil",
             Tool::Eraser => "Eraser",
             Tool::Laser => "Laser pointer",
+            Tool::Comment => "Comment",
         }
     }
     pub fn shortcut(self) -> &'static str {
@@ -100,6 +104,7 @@ impl Tool {
             Tool::Pencil => "⇧P",
             Tool::Eraser => "E",
             Tool::Laser => "K",
+            Tool::Comment => "C",
         }
     }
 }
@@ -123,6 +128,10 @@ pub enum AppRequest {
     PlaceImage,
     /// Pick an image for fill layer `.1` of these layers.
     ImageFill(Vec<NodeId>, usize),
+    /// Pick files to attach to the comment being written (into `Editor::picked_files`).
+    PickAttachments,
+    /// Open a file (a comment attachment) in its default app.
+    OpenFile(PathBuf),
 }
 
 #[derive(Debug, Clone)]
@@ -251,6 +260,14 @@ pub struct Editor {
     pub meta_dirty: bool,
     /// The project's design tokens (saved in the manifest; changes set `meta_dirty`).
     pub tokens: crate::tokens::Tokens,
+    /// The project's comment threads (saved in the manifest; changes set `meta_dirty`).
+    pub comments: crate::comments::Comments,
+    /// Who comments from this app: set from [`crate::comments::local_author`] by the app.
+    pub me: crate::comments::Author,
+    /// Folder of the open project (attachments are copied into it), None for scratch work.
+    pub project_dir: Option<PathBuf>,
+    /// Files the user picked to attach to the comment being written.
+    pub picked_files: Vec<PathBuf>,
     /// Auto-layout frames not re-laid out while a child is being dragged inside them.
     pub layout_suspended: Vec<NodeId>,
     /// Pen tool in progress.
@@ -327,6 +344,10 @@ impl Editor {
             active_page: 0,
             meta_dirty: false,
             tokens: crate::tokens::Tokens::default(),
+            comments: crate::comments::Comments::default(),
+            me: crate::comments::Author::person("me", "Me"),
+            project_dir: None,
+            picked_files: Vec::new(),
             layout_suspended: Vec::new(),
             pen: None,
             path_edit: None,
@@ -763,6 +784,12 @@ impl Editor {
             Tool::Laser => {
                 self.laser_point(world, time_ms);
                 self.gesture = Gesture::Laser;
+            }
+            Tool::Comment => {
+                self.end_text_edit();
+                let node = hit::hit_test(&self.doc, world, self.camera.zoom);
+                self.ui_events
+                    .push(commands::UiEvent::Comment { node, world });
             }
             Tool::Frame
             | Tool::Rect

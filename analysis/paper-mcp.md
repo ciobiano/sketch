@@ -151,8 +151,9 @@ artboards when content clips; never show raw node ids; call `finish_working_on_n
 | screenshot | offscreen wgpu render of the node, PNG image content |
 | undo / live update | one undo step per tool call, through `Editor::edit`; the window repaints on every call |
 
-Not carried over (no equivalent in a local-first single-user app): comments, design tokens,
+Not carried over (no equivalent in a local-first single-user app):
 teams/folders/drafts, AI image generation (`paper-gen://`), video export, the per-agent
 "working" indicator (kept as a harmless no-op tool so agent prompts written for Paper work).
 Added for Sketch: whiteboard shapes and hand-drawn style (`create_shape`, Excalidraw keys
-in `update_styles`), `undo`/`redo`, and page/project listing.
+in `update_styles`), `undo`/`redo`, page/project listing, and agent replies and reactions in
+comment threads (`reply_to_comment_thread`, `set_comment_reaction`).

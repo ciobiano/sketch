@@ -169,7 +169,7 @@ pub fn node_key(ed: &Editor, page: usize, id: NodeId) -> String {
     format!("{}:{}", page_prefix(ed, page), id.0)
 }
 
-fn find_page(ed: &Editor, key: &str) -> Result<usize, String> {
+pub(super) fn find_page(ed: &Editor, key: &str) -> Result<usize, String> {
     let key = key.trim();
     ed.pages
         .iter()
@@ -204,7 +204,11 @@ fn page_arg(ed: &Editor, a: &Args) -> Result<usize, String> {
 }
 
 /// Resolve a node id string to (page index, node id).
-fn resolve(ed: &Editor, key: &str, default_page: usize) -> Result<(usize, NodeId), String> {
+pub(super) fn resolve(
+    ed: &Editor,
+    key: &str,
+    default_page: usize,
+) -> Result<(usize, NodeId), String> {
     let key = key.trim().trim_start_matches('#');
     let (page, num) = match key.split_once(':') {
         Some((p, n)) => (find_page(ed, p)?, n),
@@ -243,6 +247,13 @@ fn resolve_all(
 
 /// Run one tool. Errors are returned as messages for the agent.
 pub fn call(host: &mut dyn Host, name: &str, args: &Value) -> ToolResult {
+    call_as(host, name, args, None)
+}
+
+/// Run one tool for the MCP client named `client`, who is the author of any comment the
+/// call writes.
+pub fn call_as(host: &mut dyn Host, name: &str, args: &Value, client: Option<&str>) -> ToolResult {
+    let _agent = super::comments::scope(client);
     let empty = Map::new();
     let a = Args(args.as_object().unwrap_or(&empty));
     match name {
@@ -273,6 +284,12 @@ pub fn call(host: &mut dyn Host, name: &str, args: &Value) -> ToolResult {
                 "get_tokens" => super::tokens::get_tokens(ed, a.0),
                 "create_tokens" => super::tokens::create_tokens(ed, a.0),
                 "set_tokens" => super::tokens::set_tokens(ed, a.0),
+                "list_comment_threads" => super::comments::list_threads(ed, a.0),
+                "get_comment_thread" => super::comments::get_thread(ed, a.0),
+                "list_comment_thread_authors" => super::comments::list_authors(ed, a.0),
+                "set_comment_thread_status" => super::comments::set_status(ed, a.0),
+                "reply_to_comment_thread" => super::comments::reply(ed, a.0),
+                "set_comment_reaction" => super::comments::react(ed, a.0),
                 "get_fill_image" => fill_image(ed, &a),
                 "find_nodes" => find_nodes(ed, &a),
                 "export" => export(host, &a),
@@ -503,6 +520,7 @@ fn basic_info(host: &mut dyn Host, a: &Args) -> ToolResult {
         "otherTopLevelLayers": others,
         "fontFamilies": ["Inter"],
         "tokens": super::tokens::summary(ed),
+        "openCommentThreads": ed.comments.threads.iter().filter(|t| t.status == crate::comments::Status::Open && ed.pages.iter().any(|p| p.id == t.page)).count(),
         "selectionCount": if page == ed.active_page { ed.selection.len() } else { 0 },
         "nodeIdFormat": "\"<page>:<n>\", e.g. \"".to_string() + &node_key(ed, page, NodeId(1)) + "\"",
     }))

@@ -6,8 +6,8 @@
 //! The connection is opened lazily and re-opened after the app restarts.
 
 use rmcp::model::{
-    CallToolRequestParams, CallToolResponse, CallToolResult, ContentBlock, ListToolsResult,
-    PaginatedRequestParams, ResultType, ServerConfig,
+    CallToolRequestParams, CallToolResponse, CallToolResult, ClientConfig, ContentBlock,
+    Implementation, ListToolsResult, PaginatedRequestParams, ResultType, ServerConfig,
 };
 use rmcp::service::{RequestContext, RunningService};
 use rmcp::transport::StreamableHttpClientTransport;
@@ -28,7 +28,7 @@ The app serves MCP itself at http://127.0.0.1:29980/mcp; set SKETCH_RS_MCP_PORT 
 the port (in both the app's and the bridge's environment).
 ";
 
-type Client = RunningService<RoleClient, ()>;
+type Client = RunningService<RoleClient, ClientConfig>;
 
 #[derive(Clone)]
 struct Bridge {
@@ -37,9 +37,15 @@ struct Bridge {
 }
 
 impl Bridge {
-    async fn connect(&self) -> Result<(), String> {
+    /// Connect as `client`, the stdio client's identity, so the app knows which agent is
+    /// calling (it signs that agent's comments with its name).
+    async fn connect(&self, client: Option<Implementation>) -> Result<(), String> {
         let transport = StreamableHttpClientTransport::from_uri(self.url.clone());
-        let client = ()
+        let mut config = ClientConfig::default();
+        if let Some(c) = client {
+            config.client_info = c;
+        }
+        let client = config
             .serve(transport)
             .await
             .map_err(|e| format!("cannot reach Sketch at {}: {e}", self.url))?;
@@ -47,11 +53,15 @@ impl Bridge {
         Ok(())
     }
 
-    async fn forward(&self, params: CallToolRequestParams) -> Result<CallToolResult, String> {
+    async fn forward(
+        &self,
+        params: CallToolRequestParams,
+        client: Option<Implementation>,
+    ) -> Result<CallToolResult, String> {
         // One retry with a fresh connection covers an app restart between calls.
         for attempt in 0..2 {
             if self.client.lock().await.is_none() {
-                self.connect().await?;
+                self.connect(client.clone()).await?;
             }
             let res = {
                 let guard = self.client.lock().await;
@@ -86,9 +96,10 @@ impl ServerHandler for Bridge {
     async fn call_tool(
         &self,
         request: CallToolRequestParams,
-        _context: RequestContext<RoleServer>,
+        context: RequestContext<RoleServer>,
     ) -> Result<CallToolResponse, ErrorData> {
-        let r = match self.forward(request).await {
+        let client = context.peer.peer_info().map(|i| i.client_info.clone());
+        let r = match self.forward(request, client).await {
             Ok(mut r) => {
                 // The app may have answered over an older protocol revision (no resultType);
                 // 2026-07-28 clients require it. rmcp drops it again for older-revision peers.

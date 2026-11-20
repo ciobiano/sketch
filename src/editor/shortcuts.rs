@@ -133,6 +133,7 @@ fn bindings() -> Vec<(Key, Chord, Action, &'static str)> {
         (Char('l'), SHIFT, A::Tool(Tool::Arrow), "Arrow tool"),
         (Char('s'), PLAIN, A::Tool(Tool::Sticky), "Sticky note"),
         (Char('k'), PLAIN, A::Tool(Tool::Laser), "Laser pointer"),
+        (Char('c'), PLAIN, A::Tool(Tool::Comment), "Comment"),
         (Char('1'), PLAIN, A::Tool(Tool::Select), "Select tool"),
         (Char('2'), PLAIN, A::Tool(Tool::Rect), "Rectangle tool"),
         (Char('3'), PLAIN, A::Tool(Tool::Diamond), "Diamond tool"),
