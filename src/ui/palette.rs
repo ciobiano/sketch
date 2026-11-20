@@ -189,7 +189,10 @@ pub fn run(ed: &mut Editor, st: &mut UiState, cmd: Command) {
                 ed.insert_library_item(&item, at);
             }
         }
-        Command::ToggleLibrary => st.show_library = !st.show_library,
+        Command::ToggleLibrary => {
+            st.show_library = !st.show_library;
+            st.show_comments = false;
+        }
     }
 }
 

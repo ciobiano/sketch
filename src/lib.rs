@@ -2,6 +2,7 @@
 
 pub mod app;
 pub mod assets;
+pub mod comments;
 pub mod connector;
 pub mod demo;
 pub mod editor;

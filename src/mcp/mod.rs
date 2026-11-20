@@ -10,6 +10,7 @@
 //! * [`tools`]: tool names, descriptions and schemas; [`css`] and [`html`]: the style and
 //!   markup mapping used by `write_html` / `update_styles`.
 
+pub mod comments;
 pub mod css;
 pub mod exec;
 pub mod html;
@@ -46,6 +47,8 @@ pub type ToolResult = Result<Vec<Out>, String>;
 pub struct Call {
     pub name: String,
     pub args: serde_json::Value,
+    /// The MCP client's name from its handshake (e.g. `claude-code`), if it sent one.
+    pub client: Option<String>,
     pub reply: tokio::sync::oneshot::Sender<ToolResult>,
 }
 
@@ -54,7 +57,7 @@ pub struct Call {
 /// from the event loop instead.
 pub fn serve_host(host: &mut dyn exec::Host, rx: std::sync::mpsc::Receiver<Call>) {
     while let Ok(call) = rx.recv() {
-        let r = exec::call(host, &call.name, &call.args);
+        let r = exec::call_as(host, &call.name, &call.args, call.client.as_deref());
         let _ = call.reply.send(r);
     }
 }

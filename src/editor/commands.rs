@@ -7,13 +7,20 @@ use crate::history::Tx;
 use crate::model::{NodeId, NodeKind, Style, TextStyle};
 
 /// Requests for the egui chrome (consumed by `ui::draw`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum UiEvent {
     TogglePalette,
     Rename(NodeId),
     ToggleUi,
     ToggleHelp,
     ToggleGrid,
+    /// Show or hide comment pins on the canvas.
+    ToggleComments,
+    /// Start a comment thread at a page position, pinned to `node` when there is one.
+    Comment {
+        node: Option<NodeId>,
+        world: crate::geom::V2,
+    },
 }
 
 impl Editor {

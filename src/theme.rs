@@ -337,6 +337,10 @@ pub enum Icon {
     Laser,
     Library,
     Sketch,
+    Comment,
+    Attach,
+    Check,
+    Close,
 }
 
 pub fn paint_icon(painter: &egui::Painter, rect: Rect, icon: Icon, color: Color32) {
@@ -696,6 +700,51 @@ pub fn paint_icon(painter: &egui::Painter, rect: Rect, icon: Icon, color: Color3
                     pt(11.0 + dx * 1.35, 5.0 + dy * 1.35),
                 ]);
             }
+        }
+        Icon::Comment => {
+            // Speech bubble with its tail at the bottom left, like a comment pin.
+            let mut pts = arc(
+                pt(8.0, 7.2),
+                5.6 * u,
+                std::f32::consts::PI * 0.75,
+                std::f32::consts::PI * 2.6,
+                18,
+            );
+            pts.push(pt(2.6, 13.6));
+            painter.add(egui::Shape::closed_line(pts, st));
+        }
+        Icon::Attach => {
+            // A paper clip: three parallel strokes joined by round ends, tilted 45°.
+            use std::f32::consts::PI;
+            let mut v: Vec<(f32, f32)> = vec![(7.5, 5.0)];
+            let arc_pts = |cx: f32, cy: f32, r: f32, a0: f32, a1: f32| -> Vec<(f32, f32)> {
+                (0..=8)
+                    .map(|i| {
+                        let a = a0 + (a1 - a0) * i as f32 / 8.0;
+                        (cx + r * a.cos(), cy + r * a.sin())
+                    })
+                    .collect()
+            };
+            v.extend(arc_pts(8.75, 11.0, 1.25, PI, 0.0));
+            v.extend(arc_pts(7.75, 3.5, 2.25, 0.0, -PI));
+            v.extend(arc_pts(7.75, 12.0, 2.25, PI, 0.0));
+            v.push((10.0, 10.5));
+            let (s45, c45) = (PI / 4.0).sin_cos();
+            let pts: Vec<Pos2> = v
+                .into_iter()
+                .map(|(x, y)| {
+                    let (dx, dy) = (x - 8.0, y - 8.0);
+                    pt(8.0 + dx * c45 - dy * s45, 8.0 + dx * s45 + dy * c45)
+                })
+                .collect();
+            line(&pts);
+        }
+        Icon::Check => {
+            line(&[pt(3.0, 8.5), pt(6.5, 12.0), pt(13.0, 4.5)]);
+        }
+        Icon::Close => {
+            line(&[pt(4.0, 4.0), pt(12.0, 12.0)]);
+            line(&[pt(12.0, 4.0), pt(4.0, 12.0)]);
         }
         Icon::Library => {
             for x in [3.0, 6.5] {

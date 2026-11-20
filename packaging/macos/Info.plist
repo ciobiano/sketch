@@ -14,11 +14,12 @@
 	<string>AppIcon</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
-	<!-- Both match the version in Cargo.toml; Sparkle compares CFBundleVersion with the feed's. -->
+	<!-- The version matches Cargo.toml. The build, shown in brackets in About, goes up with every
+	     release: Sparkle compares it with the feed's to decide whether to offer an update. -->
 	<key>CFBundleShortVersionString</key>
 	<string>0.1.2</string>
 	<key>CFBundleVersion</key>
-	<string>0.1.2</string>
+	<string>0.1.3</string>
 	<key>NSHumanReadableCopyright</key>
 	<string>Copyright © 2026 Michael Shimeles</string>
 	<key>LSMinimumSystemVersion</key>

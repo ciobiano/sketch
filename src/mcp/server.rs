@@ -57,6 +57,18 @@ pub fn to_result(r: ToolResult) -> CallToolResult {
     }
 }
 
+/// The client's display title, else its name, from the MCP handshake.
+fn client_name(context: &RequestContext<RoleServer>) -> Option<String> {
+    let info = context.peer.peer_info()?;
+    let c = &info.client_info;
+    Some(
+        c.title
+            .clone()
+            .filter(|t| !t.trim().is_empty())
+            .unwrap_or_else(|| c.name.clone()),
+    )
+}
+
 /// One MCP session's handler; all sessions share the dispatcher.
 #[derive(Clone)]
 pub struct SketchServer {
@@ -85,12 +97,13 @@ impl ServerHandler for SketchServer {
     async fn call_tool(
         &self,
         request: CallToolRequestParams,
-        _context: RequestContext<RoleServer>,
+        context: RequestContext<RoleServer>,
     ) -> Result<CallToolResponse, ErrorData> {
         let (reply, rx) = tokio::sync::oneshot::channel();
         let call = Call {
             name: request.name.to_string(),
             args: serde_json::Value::Object(request.arguments.unwrap_or_default()),
+            client: client_name(&context),
             reply,
         };
         let r = if !(self.dispatch)(call) {

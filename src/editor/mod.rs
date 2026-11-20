@@ -41,10 +41,12 @@ pub enum Tool {
     Pencil,
     Eraser,
     Laser,
+    /// Pin a comment thread to a layer or a spot on the page.
+    Comment,
 }
 
 impl Tool {
-    pub const ALL: [Tool; 16] = [
+    pub const ALL: [Tool; 17] = [
         Tool::Select,
         Tool::Hand,
         Tool::Frame,
@@ -61,6 +63,7 @@ impl Tool {
         Tool::Pencil,
         Tool::Eraser,
         Tool::Laser,
+        Tool::Comment,
     ];
     pub fn label(self) -> &'static str {
         match self {
@@ -80,6 +83,7 @@ impl Tool {
             Tool::Pencil => "Pencil",
             Tool::Eraser => "Eraser",
             Tool::Laser => "Laser pointer",
+            Tool::Comment => "Comment",
         }
     }
     pub fn shortcut(self) -> &'static str {
@@ -100,6 +104,7 @@ impl Tool {
             Tool::Pencil => "⇧P",
             Tool::Eraser => "E",
             Tool::Laser => "K",
+            Tool::Comment => "C",
         }
     }
 }
@@ -123,6 +128,10 @@ pub enum AppRequest {
     PlaceImage,
     /// Pick an image for fill layer `.1` of these layers.
     ImageFill(Vec<NodeId>, usize),
+    /// Pick files to attach to the comment being written (into `Editor::picked_files`).
+    PickAttachments,
+    /// Open a file (a comment attachment) in its default app.
+    OpenFile(PathBuf),
 }
 
 #[derive(Debug, Clone)]
@@ -144,6 +153,12 @@ enum Gesture {
         start: V2,
         scope: Option<NodeId>,
         base: Vec<NodeId>,
+    },
+    /// Comment tool pressed: a click starts a comment there, a drag pans the canvas.
+    CommentPress {
+        start_screen: V2,
+        world: V2,
+        node: Option<NodeId>,
     },
     /// Pressed on a node; becomes Move once the pointer travels far enough.
     Press {
@@ -251,6 +266,14 @@ pub struct Editor {
     pub meta_dirty: bool,
     /// The project's design tokens (saved in the manifest; changes set `meta_dirty`).
     pub tokens: crate::tokens::Tokens,
+    /// The project's comment threads (saved in the manifest; changes set `meta_dirty`).
+    pub comments: crate::comments::Comments,
+    /// Who comments from this app: set from [`crate::comments::local_author`] by the app.
+    pub me: crate::comments::Author,
+    /// Folder of the open project (attachments are copied into it), None for scratch work.
+    pub project_dir: Option<PathBuf>,
+    /// Files the user picked to attach to the comment being written.
+    pub picked_files: Vec<PathBuf>,
     /// Auto-layout frames not re-laid out while a child is being dragged inside them.
     pub layout_suspended: Vec<NodeId>,
     /// Pen tool in progress.
@@ -327,6 +350,10 @@ impl Editor {
             active_page: 0,
             meta_dirty: false,
             tokens: crate::tokens::Tokens::default(),
+            comments: crate::comments::Comments::default(),
+            me: crate::comments::Author::person("me", "Me"),
+            project_dir: None,
+            picked_files: Vec::new(),
             layout_suspended: Vec::new(),
             pen: None,
             path_edit: None,
@@ -764,6 +791,15 @@ impl Editor {
                 self.laser_point(world, time_ms);
                 self.gesture = Gesture::Laser;
             }
+            Tool::Comment => {
+                self.end_text_edit();
+                let node = hit::hit_test(&self.doc, world, self.camera.zoom);
+                self.gesture = Gesture::CommentPress {
+                    start_screen: pos,
+                    world,
+                    node,
+                };
+            }
             Tool::Frame
             | Tool::Rect
             | Tool::Ellipse
@@ -1058,6 +1094,23 @@ impl Editor {
                 self.camera.pan_by_screen(pos - last);
                 self.revision += 1;
                 self.gesture = Gesture::Pan { last: pos };
+            }
+            Gesture::CommentPress {
+                start_screen,
+                world,
+                node,
+            } => {
+                if pos.dist(start_screen) < DRAG_THRESHOLD {
+                    self.gesture = Gesture::CommentPress {
+                        start_screen,
+                        world,
+                        node,
+                    };
+                } else {
+                    self.camera.pan_by_screen(pos - start_screen);
+                    self.revision += 1;
+                    self.gesture = Gesture::Pan { last: pos };
+                }
             }
             Gesture::Press {
                 start_screen,
@@ -1447,6 +1500,10 @@ impl Editor {
         let _ = button;
         match std::mem::replace(&mut self.gesture, Gesture::None) {
             Gesture::None | Gesture::Pan { .. } => {}
+            Gesture::CommentPress { world, node, .. } => {
+                self.ui_events
+                    .push(commands::UiEvent::Comment { node, world });
+            }
             Gesture::Press { click_select, .. } => {
                 if let Some(id) = click_select {
                     if self.mods.shift {
@@ -1977,6 +2034,7 @@ impl Editor {
             A::ToggleUi => self.ui_events.push(commands::UiEvent::ToggleUi),
             A::ToggleHelp => self.ui_events.push(commands::UiEvent::ToggleHelp),
             A::ToggleGrid => self.ui_events.push(commands::UiEvent::ToggleGrid),
+            A::ToggleComments => self.ui_events.push(commands::UiEvent::ToggleComments),
             A::SelectNext => self.select_sibling(true),
             A::SelectPrev => self.select_sibling(false),
             A::SelectParent => self.select_parent(),

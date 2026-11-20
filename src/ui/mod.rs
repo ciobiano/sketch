@@ -1,6 +1,7 @@
 //! egui chrome: menu bar, layers panel, design (properties) panel, floating toolbar, and the
 //! projects home screen.
 
+pub mod comments;
 pub mod home;
 pub mod inspector;
 pub mod library;
@@ -37,6 +38,9 @@ pub struct UiState {
     pub library: library::LibraryUi,
     /// Left sidebar shows the library instead of the layers.
     pub show_library: bool,
+    /// Left sidebar shows the comment threads instead of the layers.
+    pub show_comments: bool,
+    pub comments: comments::CommentsUi,
     pub palette: palette::PaletteUi,
     /// All panels hidden (⌘\\): just the canvas.
     pub hide_ui: bool,
@@ -101,6 +105,15 @@ pub fn draw(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) -> egui::Rect {
             UiEvent::ToggleUi => st.hide_ui = !st.hide_ui,
             UiEvent::ToggleHelp => st.show_help = !st.show_help,
             UiEvent::ToggleGrid => st.show_grid_off = !st.show_grid_off,
+            UiEvent::ToggleComments => {
+                st.comments.hidden = !st.comments.hidden;
+                ed.status = if st.comments.hidden {
+                    "Comments hidden. Shift+C shows them again".into()
+                } else {
+                    "Comments shown".into()
+                };
+            }
+            UiEvent::Comment { node, world } => st.comments.start(ed, node, world),
         }
     }
     if st.hide_ui {
@@ -153,6 +166,7 @@ pub fn draw(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) -> egui::Rect {
         )
         .show(ui, |ui| inspector::panel(ui, ed, st));
     let canvas = ui.available_rect_before_wrap();
+    comments::canvas(ui.ctx(), ed, &mut st.comments, canvas);
     toolbar(ui.ctx(), ed, canvas);
     status(ui.ctx(), ed, canvas);
     palette::draw(ui.ctx(), ed, st, canvas);
@@ -290,8 +304,14 @@ fn layers(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) {
     ui.add_space(6.0);
     let p = theme::pal(ui);
     ui.horizontal(|ui| {
-        for (lib, label) in [(false, "Layers"), (true, "Library")] {
-            let on = st.show_library == lib;
+        // 0 layers, 1 library, 2 comments.
+        let tab = if st.show_comments {
+            2
+        } else {
+            usize::from(st.show_library)
+        };
+        for (i, label) in ["Layers", "Library", "Comments"].into_iter().enumerate() {
+            let on = tab == i;
             let r = ui.add(
                 egui::Label::new(
                     RichText::new(label)
@@ -301,10 +321,11 @@ fn layers(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) {
                 .sense(egui::Sense::click()),
             );
             if r.clicked() {
-                st.show_library = lib;
+                st.show_library = i == 1;
+                st.show_comments = i == 2;
             }
         }
-        if st.show_library {
+        if st.show_library || st.show_comments {
             return;
         }
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -329,6 +350,10 @@ fn layers(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) {
     ui.add_space(2.0);
     if st.show_library {
         library::panel(ui, ed, st);
+        return;
+    }
+    if st.show_comments {
+        comments::panel(ui, ed, &mut st.comments);
         return;
     }
     egui::ScrollArea::vertical()
@@ -680,6 +705,7 @@ fn tool_icon(t: Tool) -> Icon {
         Tool::Text => Icon::Text,
         Tool::Pencil => Icon::Pencil,
         Tool::Eraser => Icon::Eraser,
+        Tool::Comment => Icon::Comment,
     }
 }
 
@@ -698,7 +724,14 @@ fn toolbar(ctx: &egui::Context, ed: &mut Editor, canvas: egui::Rect) {
                     ui.horizontal(|ui| {
                         ui.spacing_mut().item_spacing.x = 2.0;
                         for t in Tool::ALL {
-                            if matches!(t, Tool::Frame | Tool::Line | Tool::Text | Tool::Pencil) {
+                            if matches!(
+                                t,
+                                Tool::Frame
+                                    | Tool::Line
+                                    | Tool::Text
+                                    | Tool::Pencil
+                                    | Tool::Comment
+                            ) {
                                 let (r, _) = ui.allocate_exact_size(
                                     egui::vec2(9.0, 28.0),
                                     egui::Sense::hover(),

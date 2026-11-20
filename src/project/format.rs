@@ -5,6 +5,7 @@
 //! is a pure function `Value -> Value`, so old files keep loading forever and every step is
 //! unit-testable on its own.
 
+use crate::comments::Comments;
 use crate::geom::Camera;
 use crate::model::{Document, Node, NodeId};
 use crate::tokens::Tokens;
@@ -81,6 +82,9 @@ pub struct Manifest {
     /// Design tokens shared by every page.
     #[serde(default, skip_serializing_if = "Tokens::is_empty")]
     pub tokens: Tokens,
+    /// Comment threads on every page, and their authors.
+    #[serde(default, skip_serializing_if = "Comments::is_empty")]
+    pub comments: Comments,
 }
 
 impl Manifest {
@@ -100,6 +104,7 @@ impl Manifest {
             active_page: Some(page.id.clone()),
             pages: vec![page],
             tokens: Tokens::default(),
+            comments: Comments::default(),
         }
     }
 

@@ -106,6 +106,7 @@ impl App {
             }
             Start::Scratch(ed) => app.ed = *ed,
         }
+        app.ed.me = crate::comments::local_author();
         app
     }
 
@@ -433,6 +434,7 @@ impl App {
                     self.st.library.library.items.extend(items);
                     self.st.library.dirty = true;
                     self.st.show_library = true;
+                    self.st.show_comments = false;
                     format!("Added {n} item(s) to the library")
                 }),
             "svg" | "excalidraw" | "json" => text().and_then(|t| {
@@ -516,6 +518,26 @@ impl App {
         for req in std::mem::take(&mut self.ed.requests) {
             match req {
                 AppRequest::Home => self.go_home(),
+                AppRequest::PickAttachments => {
+                    if let Some(files) = rfd::FileDialog::new()
+                        .set_title("Attach files")
+                        .pick_files()
+                    {
+                        self.ed.picked_files.extend(files);
+                    }
+                }
+                AppRequest::OpenFile(path) => {
+                    let opener = if cfg!(target_os = "macos") {
+                        "open"
+                    } else if cfg!(windows) {
+                        "explorer"
+                    } else {
+                        "xdg-open"
+                    };
+                    if let Err(e) = std::process::Command::new(opener).arg(&path).spawn() {
+                        self.error(format!("Could not open {}: {e}", path.display()));
+                    }
+                }
                 AppRequest::ImageFill(ids, i) => {
                     let Some(p) = rfd::FileDialog::new()
                         .add_filter("Images", &["png", "jpg", "jpeg", "gif", "webp"])
@@ -1333,7 +1355,7 @@ impl App {
             return;
         }
         for c in calls {
-            let r = crate::mcp::exec::call(self, &c.name, &c.args);
+            let r = crate::mcp::exec::call_as(self, &c.name, &c.args, c.client.as_deref());
             if let Err(e) = &r {
                 log::info!("mcp {}: {e}", c.name);
             }

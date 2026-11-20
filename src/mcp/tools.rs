@@ -2,7 +2,8 @@
 //!
 //! Names and argument shapes follow Paper's MCP server where Sketch has an equivalent
 //! (`analysis/paper-mcp.md` §2), so agent prompts written for Paper carry over. Sketch
-//! additions: `create_shape` (whiteboard shapes and arrows), `select_nodes`, `undo`, `redo`.
+//! additions: `create_shape` (whiteboard shapes and arrows), `select_nodes`, `undo`, `redo`,
+//! `reply_to_comment_thread` and `set_comment_reaction`.
 
 use serde_json::{Value, json};
 
@@ -26,6 +27,10 @@ delete_nodes. Whiteboard shapes, sticky notes and arrows: create_shape. Hand-dra
 update_styles with {\"sketch\": true, \"roughness\": 1, \"fillStyle\": \"hachure\"}.
 - Check your work with get_screenshot. Artboard height is a starting point: when content \
 clips set height: \"fit-content\" with update_styles.
+- Comments: people pin feedback to layers. list_comment_threads shows the open threads \
+(mentionedUserId: \"agent\" finds the ones addressed to agents); get_comment_thread reads one \
+in full. After fixing the design, say what you changed with reply_to_comment_thread and mark \
+the thread done with set_comment_thread_status.
 - Call finish_working_on_nodes when done.";
 
 fn file_id() -> Value {
@@ -279,6 +284,89 @@ pub fn definitions() -> Vec<Value> {
                 "path": {"type": "string", "description": "Output file (default: Downloads/<project>.pdf)."},
             }),
             &["nodeIds"],
+            false,
+        ),
+        // ------------------------------------------------------------ comments
+        tool(
+            "list_comment_threads",
+            "Summaries of the comment threads in the project. A thread is feedback pinned to a \
+             layer or a spot on a page: a first message, replies, reactions and attachments, \
+             each by a person or an agent, and a status of open or resolved. Only open threads \
+             are listed unless `status` says otherwise. Read one in full with \
+             get_comment_thread. Once you have handled a thread's feedback, reply with what you \
+             changed and resolve it with set_comment_thread_status.",
+            json!({
+                "pageId": {"type": "string", "description": "Only threads on this page. Omit for every page."},
+                "currentPageOnly": {"type": "boolean", "description": "Only threads on the page the user is viewing. Ignored when pageId is set."},
+                "nodeId": {"type": "string", "description": "Only threads pinned to this layer."},
+                "status": {"type": "string", "enum": ["open", "resolved", "all"], "description": "open (default): threads still waiting for action. resolved: finished ones. all: both."},
+                "threadAuthorUserId": {"type": "string", "description": "Only threads this author started. \"current-user\" is the person using Sketch; other ids come from earlier results or list_comment_thread_authors."},
+                "participantUserId": {"type": "string", "description": "Only threads this author started or replied to. Accepts \"current-user\"."},
+                "mentionedUserId": {"type": "string", "description": "Only threads that @mention this author. \"agent\" matches @agent; an agent's own id also matches threads that say @agent. Accepts \"current-user\"."},
+                "search": {"type": "string", "description": "Case-insensitive text to find in messages or author names."},
+                "searchScope": {"type": "string", "enum": ["first-message", "all-messages"], "description": "Search the first message only, or every message (default)."},
+                "sortField": {"type": "string", "enum": ["page", "createdAt", "updatedAt"], "description": "page (default): page order, then top to bottom and left to right."},
+                "sortDirection": {"type": "string", "enum": ["asc", "desc"], "description": "Defaults to asc."},
+                "limit": {"type": "integer", "minimum": 1, "maximum": 200, "description": "Most threads to return. Defaults to 50."},
+                "offset": {"type": "integer", "minimum": 0, "description": "Matching threads to skip, for paging. Defaults to 0."},
+                "previewLength": {"type": "integer", "minimum": 20, "maximum": 1000, "description": "Characters of each first message to include. Defaults to 240."},
+            }),
+            &[],
+            true,
+        ),
+        tool(
+            "get_comment_thread",
+            "One comment thread in full, whatever its status: every message with its author, \
+             mentions, reactions and attachments (each with a local path you can read; image \
+             attachments are also returned as images), the page, the layer it is pinned to and \
+             the pin's position.",
+            json!({"commentThreadId": {"type": "string", "minLength": 1, "description": "Thread id from list_comment_threads."}}),
+            &["commentThreadId"],
+            true,
+        ),
+        tool(
+            "list_comment_thread_authors",
+            "Everyone who has written a comment in the project, people and agents, with their id, \
+             display name, how many threads they started and messages they wrote, and when they \
+             last commented. Use it to turn a name into an id for the list_comment_threads \
+             filters.",
+            json!({"pageId": {"type": "string", "description": "Only count comments on this page. Omit for every page."}}),
+            &[],
+            true,
+        ),
+        tool(
+            "set_comment_thread_status",
+            "Mark a comment thread resolved once its feedback is handled in the design, or open \
+             again if it needs more work.",
+            json!({
+                "commentThreadId": {"type": "string", "minLength": 1, "description": "Thread id from list_comment_threads."},
+                "status": {"type": "string", "enum": ["open", "resolved"], "description": "resolved when the feedback is done; open to reopen."},
+            }),
+            &["commentThreadId", "status"],
+            false,
+        ),
+        tool(
+            "reply_to_comment_thread",
+            "Reply in a comment thread, signed with your agent name. Say what you changed or ask \
+             a question. Write @Name to mention someone from list_comment_thread_authors.",
+            json!({
+                "commentThreadId": {"type": "string", "minLength": 1, "description": "Thread id from list_comment_threads."},
+                "text": {"type": "string", "minLength": 1, "description": "The reply."},
+            }),
+            &["commentThreadId", "text"],
+            false,
+        ),
+        tool(
+            "set_comment_reaction",
+            "Add or remove your emoji reaction on a message in a comment thread, e.g. 👀 when you \
+             start on it.",
+            json!({
+                "commentThreadId": {"type": "string", "minLength": 1, "description": "Thread id from list_comment_threads."},
+                "messageId": {"type": "string", "description": "Message to react to. Defaults to the thread's first message."},
+                "emoji": {"type": "string", "minLength": 1, "description": "One emoji, e.g. 👍 ✅ 👀."},
+                "on": {"type": "boolean", "description": "true (default) adds the reaction, false removes it."},
+            }),
+            &["commentThreadId", "emoji"],
             false,
         ),
         // ------------------------------------------------------------ design tokens
@@ -538,6 +626,12 @@ pub const GUIDE_INSTRUCTIONS: &str = "\
 6. Review with get_screenshot (scale 1; 2 for small text). Fix clipping with
    update_styles({height: \"fit-content\"}) on the artboard.
 7. finish_working_on_nodes at the end (also saves the project).
+
+Comments: people review a design by pinning comment threads to layers. To work through them,
+list_comment_threads (open ones; mentionedUserId \"agent\" for those addressed to agents),
+get_comment_thread for the full text and attachments, change the design, then
+reply_to_comment_thread with what you did and set_comment_thread_status \"resolved\". Use
+set_comment_reaction 👀 to show you have started on a thread.
 
 Layout model: every container is an auto-layout frame (flexbox). display:flex with
 flex-direction row/column, gap, padding, justify-content (start, center, end, space-between),

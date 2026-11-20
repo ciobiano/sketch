@@ -32,7 +32,8 @@ Paper. No original Paper code or assets are included in this repository.
 Sketch opens on a **home screen** of your projects (recents grid with thumbnails, New, Import,
 and Rename / Duplicate / Move to Trash from each card's ⋯ menu or right-click; restore from
 Trash). Each project is a plain folder in `~/Documents/sketch-rs/<name>/` holding `project.json`
-(with the project's design tokens) and one JSON file per page in `pages/`. Work is autosaved about a second after each change with
+(with the project's design tokens and comments), one JSON file per page in `pages/` and files
+attached to comments in `attachments/`. Work is autosaved about a second after each change with
 crash-safe atomic writes; files are versioned and older versions migrate on load. Set
 `SKETCH_RS_HOME` to use another folder.
 
@@ -74,7 +75,10 @@ It uses Metal through wgpu. Shortcuts use ⌘, and trackpad pinch zooms.
 `scripts/release-macos.sh` builds the universal `Sketch.app` with `sketch-rs-mcp` inside, signs
 it with a Developer ID certificate, notarizes it and packages `Sketch.dmg`, plus the zip and
 signed `appcast.xml` that installed copies update from. The one-time credential setup is at the
-top of the script. Releases go to the repository named in `SUFeedURL`.
+top of the script. Releases go to the repository named in `SUFeedURL`. About shows the version
+and, in brackets, the build (`CFBundleVersion` in `packaging/macos/Info.plist`), for example
+0.1.2 (0.1.3). Installed copies update only to a higher build, so raise the build for every
+release; the version in `Cargo.toml` changes only when you want the visible version to.
 
 Without a Developer ID certificate, `SIGN_IDENTITY=- scripts/release-macos.sh` signs ad hoc and
 skips notarizing. Gatekeeper blocks that build on other Macs, but on the Mac that built it the
@@ -165,7 +169,8 @@ written for Paper work here too.
 | See | `get_screenshot` (PNG image content of a node or the page), `export` (PNG/SVG/PDF files), `export_combined_pdf` |
 | Write | `create_artboard`, `write_html`, `update_styles`, `set_text_content`, `rename_nodes`, `duplicate_nodes`, `move_nodes`, `delete_nodes`, `finish_working_on_nodes` (saves) |
 | Design tokens | `get_tokens` (JSON, CSS `:root` or Tailwind v4 `@theme`), `create_tokens`, `set_tokens` |
-| Sketch extras | `create_shape` (rectangles, ellipses, diamonds, stars, stickies, text, lines, arrows bound to shapes), `select_nodes`, `undo`, `redo` |
+| Comments | `list_comment_threads`, `get_comment_thread`, `list_comment_thread_authors`, `set_comment_thread_status` |
+| Sketch extras | `create_shape` (rectangles, ellipses, diamonds, stars, stickies, text, lines, arrows bound to shapes), `select_nodes`, `undo`, `redo`, `reply_to_comment_thread`, `set_comment_reaction` |
 
 `write_html` takes HTML with inline styles: flexbox (`display:flex`, direction, gap, padding,
 alignment, `flex-grow`, wrap) and block stacking map onto auto layout with CSS's stretch rules;
@@ -190,6 +195,25 @@ padding, and a text layer's font size, color and weight each have a token button
 tokens of the matching type. A linked field shows the token's name instead of its value; its
 menu switches to another token or unlinks the field, which keeps the current value. Typing a new
 value into a linked field unlinks it. Each pick or unlink is one undo step.
+
+**Comments** pin feedback to the design. Press C (or pick the speech bubble in the toolbar),
+click a layer or an empty spot, type and press Return; Shift+Return starts a new line. While
+commenting, dragging moves the canvas, and a click places a comment. Pins stay on the canvas
+after you close a thread, resolved ones included (they turn grey with a check), and follow
+their layer when it moves. Hover a pin to preview the thread; click it to read it, reply,
+react, attach files (copied into the project's `attachments/` folder), resolve or reopen it,
+or delete it. A reply you leave unsent is still there when you reopen the thread. Type `@` to
+mention someone who has commented in the project, or `@agent` for any agent; arrow keys and
+Return pick a name. Shift+C hides or shows the pins. The Comments tab in the left sidebar
+lists open, resolved or all threads; clicking one jumps to its pin. Your name comes from your
+macOS account the first time you comment; Rename at the bottom of the Comments tab changes it.
+
+Agents work through the same threads. `list_comment_threads` finds open feedback
+(`mentionedUserId: "agent"` narrows it to threads that say @agent), `get_comment_thread`
+returns every message with its mentions, reactions and attachments (images come back as
+images too), and the agent replies, reacts and resolves under its own name, taken from its
+MCP client (Claude Code shows as "Claude Code"). People who share a project folder each
+comment under their own name.
 
 ## Tests
 
@@ -258,6 +282,7 @@ select, Shift-click to add, double-click to rename, and use 👁 / 🔒 to hide 
 | P, ⇧P / 7 | Pen, pencil | ⌥A ⌥H ⌥D / ⌥W ⌥V ⌥S | Align left/center/right, top/middle/bottom |
 | T / 8, S | Text, sticky note | ⌥⇧H / ⌥⇧V | Distribute spacing |
 | K | Laser pointer | ⌥⇧U S I E | Union, subtract, intersect, exclude |
+| C | Comment | ⇧C | Show / hide comments |
 | E / 0 | Eraser | ⌘E | Flatten |
 | 9, ⌘⇧K | Place image | ⌘B / ⌘I / ⌘U / ⌘⇧X | Bold, italic, underline, strikethrough |
 | Enter / ⇧Enter | Edit (text, path) / select parent | ⌘⌥H | Hand-drawn style |
@@ -304,6 +329,7 @@ Known gaps), ⏳ planned in a later milestone, ❌ not planned.
 | Freehand ink with pressure | – | (pencil) | ✓ | ✅ Smoothing, pressure, eraser |
 | MCP server for AI agents | ✓ | ✓ (Dev Mode) | ✓ (community) | ✅ Streamable HTTP in the app + stdio bridge; Paper-compatible tool names, `write_html`, screenshots, whiteboard shapes |
 | Design tokens / variables | ✓ | ✓ (variables) | – | ✅ Typed tokens with aliases, `var()` in agent styles, linked layers follow changes; JSON, CSS and Tailwind output |
+| Comments | ✓ | ✓ | (Excalidraw+) | ✅ Threads pinned to layers, replies, reactions, attachments, @mentions; agents read, reply and resolve over MCP |
 | Multiplayer, cloud sync, plugins | ✓ | ✓ | ✓ | ❌ local-first by design |
 
 ## Known gaps
@@ -340,8 +366,8 @@ Known gaps), ⏳ planned in a later milestone, ❌ not planned.
   inside shapes stays a separate text layer (except sticky notes), and fonts map to Inter.
   SVG patterns, filters, masks and clip paths are not imported.
 * **MCP**: one project is open at a time, so `fileId` must name the open project (call
-  `open_file` to switch; the user's window switches too). No comments or AI image
-  generation (Paper has them). Moving or duplicating layers between pages isn't
+  `open_file` to switch; the user's window switches too). No AI image generation
+  (Paper has it). Moving or duplicating layers between pages isn't
   supported. Remote `http(s)` images aren't fetched; pass a local path or a `data:` URI.
   CSS margin, grid, shadows and transforms are reported back as ignored styles.
 * **Design tokens**: the inspector's token picker covers fill color, corner radius, gap,
@@ -350,6 +376,11 @@ Known gaps), ⏳ planned in a later milestone, ❌ not planned.
   all four sides at once. Token edits aren't part of undo history.
   Changing a token adds one undo step per page it touches, which undoes the layers but not the
   token.
+* **Comments**: there is no live sync. People see each other's comments when they share the
+  project folder (a synced folder or git), and two people commenting at the same moment can
+  overwrite each other's save. Comments aren't part of undo history. Mentions are
+  highlighted by name, so after someone renames themselves their older mentions show as plain
+  text, though they still point at that person. Emoji use egui's black-and-white emoji font.
 * **Linux file dialogs** need an XDG desktop portal. Without one, Save/Open dialogs return
   nothing. The headless CLI is unaffected.
 
