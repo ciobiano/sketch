@@ -6,6 +6,8 @@ use egui::{
     vec2,
 };
 use std::sync::Arc;
+
+mod hicons;
 use std::sync::atomic::{AtomicU32, Ordering};
 
 pub static INTER_REGULAR: &[u8] = include_bytes!("../assets/fonts/Inter-Regular.ttf");
@@ -19,7 +21,7 @@ pub const MAC_BLUE: Color32 = Color32::from_rgb(0x00, 0x7a, 0xff);
 pub const BODY: f32 = 13.0;
 pub const SECONDARY: f32 = 11.0;
 /// Height of the unified toolbar.
-pub const TOOLBAR_H: f32 = 40.0;
+pub const TOOLBAR_H: f32 = 56.0;
 /// Traffic lights: left inset and the height of the bar they are centred in (points).
 pub const TRAFFIC_LIGHTS: (f64, f64) = (14.0, TOOLBAR_H as f64);
 /// Horizontal room the traffic lights need from the window's left edge.
@@ -86,19 +88,19 @@ pub struct Palette {
 pub fn palette(dark: bool) -> Palette {
     if dark {
         Palette {
-            window: Color32::from_rgb(0x2b, 0x2b, 0x2d),
-            sidebar: Color32::from_rgb(0x26, 0x26, 0x28),
-            inspector: Color32::from_rgb(0x25, 0x25, 0x27),
-            control: Color32::from_rgb(0x3a, 0x3a, 0x3c),
-            control_border: Color32::from_white_alpha(22),
-            field: Color32::from_rgb(0x1f, 0x1f, 0x21),
-            text: Color32::from_rgb(0xec, 0xec, 0xee),
-            secondary: Color32::from_rgb(0x98, 0x98, 0x9d),
-            tertiary: Color32::from_rgb(0x63, 0x63, 0x66),
-            separator: Color32::from_rgb(0x3a, 0x3a, 0x3c),
+            window: Color32::from_gray(0x0c),
+            sidebar: Color32::from_gray(0x0c),
+            inspector: Color32::from_gray(0x0c),
+            control: Color32::from_gray(0x17),
+            control_border: Color32::from_gray(0x30),
+            field: Color32::from_gray(0x17),
+            text: Color32::from_gray(0xed),
+            secondary: Color32::from_gray(0xa1),
+            tertiary: Color32::from_gray(0x7c),
+            separator: Color32::from_gray(0x2e),
             hover: Color32::from_white_alpha(16),
             pressed: Color32::from_white_alpha(30),
-            popover: Color32::from_rgb(0x32, 0x32, 0x34),
+            popover: Color32::from_gray(0x0e),
         }
     } else {
         Palette {
@@ -184,6 +186,9 @@ fn style_for(s: &mut egui::Style, dark: bool) {
         (T::Monospace, FontId::monospace(12.0)),
     ]
     .into();
+    if dark {
+        s.animation_time = 0.22;
+    }
     s.spacing.item_spacing = vec2(6.0, 4.0);
     s.spacing.button_padding = vec2(8.0, 3.0);
     s.spacing.interact_size = vec2(24.0, 22.0);
@@ -282,8 +287,13 @@ pub fn apply(ctx: &egui::Context) {
 }
 
 /// Thin line icons in the spirit of SF Symbols, drawn into a square `rect`.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Icon {
+    Dashboard,
+    Search,
+    Folder,
+    Play,
+    Send,
     Pointer,
     Hand,
     Frame,
@@ -305,6 +315,7 @@ pub enum Icon {
     Plus,
     Minus,
     Sidebar,
+    SidebarRight,
     Export,
     Grid,
     Trash,
@@ -344,6 +355,9 @@ pub enum Icon {
 }
 
 pub fn paint_icon(painter: &egui::Painter, rect: Rect, icon: Icon, color: Color32) {
+    if hicons::paint(painter, rect, icon, color) {
+        return;
+    }
     let s = rect.width().min(rect.height());
     let c = rect.center();
     let u = s / 16.0; // design grid: 16x16
@@ -353,6 +367,20 @@ pub fn paint_icon(painter: &egui::Painter, rect: Rect, icon: Icon, color: Color3
     let line = |pts: &[Pos2]| painter.add(egui::Shape::line(pts.to_vec(), st));
     let closed = |pts: &[Pos2]| painter.add(egui::Shape::closed_line(pts.to_vec(), st));
     match icon {
+        Icon::Dashboard
+        | Icon::Search
+        | Icon::Folder
+        | Icon::Play
+        | Icon::Send
+        | Icon::Hand
+        | Icon::Text
+        | Icon::Pen
+        | Icon::Comment
+        | Icon::More
+        | Icon::Page
+        | Icon::Image
+        | Icon::Lock
+        | Icon::LockOpen => unreachable!("handled by the SVG icon set"),
         Icon::Pointer => {
             closed(&[
                 pt(4.5, 2.5),
@@ -363,18 +391,6 @@ pub fn paint_icon(painter: &egui::Painter, rect: Rect, icon: Icon, color: Color3
                 pt(7.3, 10.6),
                 pt(4.5, 13.0),
             ]);
-        }
-        Icon::Hand => {
-            for (x, top) in [(5.5, 5.0), (7.7, 3.0), (9.9, 3.5), (12.0, 5.5)] {
-                line(&[pt(x, 9.0), pt(x, top)]);
-                painter.circle_stroke(pt(x, top), 0.01, st);
-            }
-            line(&[pt(5.5, 9.0), pt(5.5, 11.0), pt(3.3, 9.0)]);
-            line(&[pt(12.0, 5.5), pt(12.0, 11.0)]);
-            painter.add(egui::Shape::line(
-                arc(pt(8.75, 11.0), 3.25 * u, 0.0, std::f32::consts::PI, 10),
-                st,
-            ));
         }
         Icon::Frame => {
             line(&[pt(5.0, 2.0), pt(5.0, 14.0)]);
@@ -395,11 +411,6 @@ pub fn paint_icon(painter: &egui::Painter, rect: Rect, icon: Icon, color: Color3
         }
         Icon::Line => {
             line(&[pt(3.0, 13.0), pt(13.0, 3.0)]);
-        }
-        Icon::Text => {
-            line(&[pt(3.5, 4.0), pt(3.5, 3.0), pt(12.5, 3.0), pt(12.5, 4.0)]);
-            line(&[pt(8.0, 3.0), pt(8.0, 13.0)]);
-            line(&[pt(6.3, 13.0), pt(9.7, 13.0)]);
         }
         Icon::Pencil => {
             closed(&[
@@ -444,31 +455,6 @@ pub fn paint_icon(painter: &egui::Painter, rect: Rect, icon: Icon, color: Color3
                 line(&[pt(3.0, 3.0), pt(13.0, 13.0)]);
             }
         }
-        Icon::Lock | Icon::LockOpen => {
-            painter.rect_stroke(
-                Rect::from_min_max(pt(3.5, 7.5), pt(12.5, 14.0)),
-                1.5 * u,
-                st,
-                egui::StrokeKind::Middle,
-            );
-            let (cx, a0) = if icon == Icon::Lock {
-                (8.0, 0.0)
-            } else {
-                (10.5, 0.0)
-            };
-            let mut sh = vec![pt(cx - 2.5, 7.5)];
-            sh.extend(arc(
-                pt(cx, 5.0),
-                2.5 * u,
-                std::f32::consts::PI,
-                std::f32::consts::TAU + a0,
-                10,
-            ));
-            if icon == Icon::Lock {
-                sh.push(pt(cx + 2.5, 7.5));
-            }
-            line(&sh);
-        }
         Icon::ChevronRight => {
             line(&[pt(6.0, 3.5), pt(10.5, 8.0), pt(6.0, 12.5)]);
         }
@@ -495,14 +481,15 @@ pub fn paint_icon(painter: &egui::Painter, rect: Rect, icon: Icon, color: Color3
         Icon::Minus => {
             line(&[pt(3.0, 8.0), pt(13.0, 8.0)]);
         }
-        Icon::Sidebar => {
+        Icon::Sidebar | Icon::SidebarRight => {
             painter.rect_stroke(
                 Rect::from_min_max(pt(1.5, 3.0), pt(14.5, 13.0)),
                 2.0 * u,
                 st,
                 egui::StrokeKind::Middle,
             );
-            line(&[pt(6.0, 3.0), pt(6.0, 13.0)]);
+            let x = if icon == Icon::Sidebar { 6.0 } else { 10.0 };
+            line(&[pt(x, 3.0), pt(x, 13.0)]);
         }
         Icon::Group => {
             let dash = |a: Pos2, b: Pos2| {
@@ -518,17 +505,6 @@ pub fn paint_icon(painter: &egui::Painter, rect: Rect, icon: Icon, color: Color3
                 st,
                 egui::StrokeKind::Middle,
             );
-        }
-        Icon::Pen => {
-            closed(&[
-                pt(8.0, 2.0),
-                pt(12.5, 8.5),
-                pt(10.0, 13.5),
-                pt(6.0, 13.5),
-                pt(3.5, 8.5),
-            ]);
-            line(&[pt(8.0, 2.0), pt(8.0, 8.0)]);
-            painter.circle_stroke(pt(8.0, 9.0), 1.0 * u, st);
         }
         Icon::Polygon => {
             closed(&[pt(8.0, 2.0), pt(14.0, 13.5), pt(2.0, 13.5)]);
@@ -557,22 +533,6 @@ pub fn paint_icon(painter: &egui::Painter, rect: Rect, icon: Icon, color: Color3
             } else {
                 closed(&[pt(8.0, 1.8), pt(14.2, 8.0), pt(8.0, 14.2), pt(1.8, 8.0)]);
             }
-        }
-        Icon::Image => {
-            painter.rect_stroke(
-                Rect::from_min_max(pt(2.0, 3.0), pt(14.0, 13.0)),
-                1.5 * u,
-                st,
-                egui::StrokeKind::Middle,
-            );
-            line(&[
-                pt(2.5, 12.0),
-                pt(6.5, 7.5),
-                pt(9.5, 10.5),
-                pt(11.0, 9.0),
-                pt(13.5, 11.5),
-            ]);
-            painter.circle_stroke(pt(10.5, 5.8), 1.1 * u, st);
         }
         Icon::AlignLeft | Icon::AlignHCenter | Icon::AlignRight => {
             let x = match icon {
@@ -701,18 +661,6 @@ pub fn paint_icon(painter: &egui::Painter, rect: Rect, icon: Icon, color: Color3
                 ]);
             }
         }
-        Icon::Comment => {
-            // Speech bubble with its tail at the bottom left, like a comment pin.
-            let mut pts = arc(
-                pt(8.0, 7.2),
-                5.6 * u,
-                std::f32::consts::PI * 0.75,
-                std::f32::consts::PI * 2.6,
-                18,
-            );
-            pts.push(pt(2.6, 13.6));
-            painter.add(egui::Shape::closed_line(pts, st));
-        }
         Icon::Attach => {
             // A paper clip: three parallel strokes joined by round ends, tilted 45°.
             use std::f32::consts::PI;
@@ -783,21 +731,6 @@ pub fn paint_icon(painter: &egui::Painter, rect: Rect, icon: Icon, color: Color3
             closed(&[pt(3.8, 4.0), pt(12.2, 4.0), pt(11.4, 14.0), pt(4.6, 14.0)]);
             line(&[pt(6.6, 6.5), pt(6.9, 11.8)]);
             line(&[pt(9.4, 6.5), pt(9.1, 11.8)]);
-        }
-        Icon::More => {
-            for x in [3.5, 8.0, 12.5] {
-                painter.circle_filled(pt(x, 8.0), 1.1 * u, color);
-            }
-        }
-        Icon::Page => {
-            closed(&[
-                pt(3.5, 1.8),
-                pt(9.5, 1.8),
-                pt(12.5, 4.8),
-                pt(12.5, 14.2),
-                pt(3.5, 14.2),
-            ]);
-            line(&[pt(9.5, 1.8), pt(9.5, 4.8), pt(12.5, 4.8)]);
         }
         Icon::Restore => {
             let mut a = arc(c, 5.5 * u, -2.6, 2.2, 14);

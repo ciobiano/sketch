@@ -838,7 +838,25 @@ impl App {
                 };
                 g.egui.egui_input_mut().events.push(ev);
             }
-            MenuCmd::Run(a) => self.ed.run(a),
+            MenuCmd::Run(a)
+                if !self.st.preview
+                    || matches!(
+                        a,
+                        A::ZoomIn
+                            | A::ZoomOut
+                            | A::Zoom100
+                            | A::ZoomFit
+                            | A::ZoomSelection
+                            | A::Save
+                            | A::SaveAs
+                            | A::ExportPng
+                            | A::ExportSvg
+                            | A::ExportPdf
+                    ) =>
+            {
+                self.ed.run(a)
+            }
+            MenuCmd::Run(_) => {}
         }
         if let Some(g) = &self.gfx {
             g.window.request_redraw();
@@ -903,6 +921,8 @@ impl ApplicationHandler<UserEvent> for App {
         {
             self.st.translucent_sidebar = translucent && crate::macos::apply_vibrancy(&window);
             self.st.native_chrome = true;
+            self.st.reduced_motion = objc2_app_kit::NSWorkspace::sharedWorkspace()
+                .accessibilityDisplayShouldReduceMotion();
             let (x, y) = theme::TRAFFIC_LIGHTS;
             crate::macos::inset_traffic_lights(&window, x, y);
             self.menu = Some(crate::macos::install_menu());
@@ -1015,6 +1035,12 @@ impl ApplicationHandler<UserEvent> for App {
                 // Light/dark switch: egui-winit swaps the style; refresh the accent too.
                 theme::set_accent(theme::system_accent());
                 ui::setup_style(&self.ctx);
+                redraw = true;
+            }
+            #[cfg(target_os = "macos")]
+            WindowEvent::Focused(true) => {
+                self.st.reduced_motion = objc2_app_kit::NSWorkspace::sharedWorkspace()
+                    .accessibilityDisplayShouldReduceMotion();
                 redraw = true;
             }
             WindowEvent::Occluded(false) => redraw = true,
@@ -1167,7 +1193,7 @@ impl ApplicationHandler<UserEvent> for App {
                 redraw = true;
             }
             WindowEvent::KeyboardInput { event, .. } => {
-                if self.ctx.egui_wants_keyboard_input() {
+                if self.st.preview || self.ctx.egui_wants_keyboard_input() {
                     self.gfx.as_ref().unwrap().window.request_redraw();
                     return;
                 }
@@ -1204,12 +1230,12 @@ impl ApplicationHandler<UserEvent> for App {
                 redraw = true;
             }
             WindowEvent::Ime(winit::event::Ime::Commit(s)) => {
-                if !self.ctx.egui_wants_keyboard_input() {
+                if !self.st.preview && !self.ctx.egui_wants_keyboard_input() {
                     self.ed.handle(InputEvent::Text(s));
                 }
                 redraw = true;
             }
-            WindowEvent::DroppedFile(p) => {
+            WindowEvent::DroppedFile(p) if !self.st.preview => {
                 let ext = p
                     .extension()
                     .map(|e| e.to_string_lossy().to_lowercase())

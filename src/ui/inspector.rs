@@ -2,7 +2,7 @@
 //! constraints, text, fills, stroke and layer properties. Edits are coalesced per field so a
 //! drag on a number is one undo step, and edits inside instances become overrides.
 
-use super::{UiState, c32, from32, section, title_text};
+use super::{UiState, c32, from32, title_text};
 use crate::editor::vector_ops::BoolOp;
 use crate::editor::{AppRequest, Editor};
 use crate::geom::v2;
@@ -155,13 +155,18 @@ fn icon_toggle(ui: &mut Ui, label: &str, on: bool, tip: &str) -> bool {
     .clicked()
 }
 
+pub(super) fn tokens_panel(ui: &mut Ui, ed: &mut Editor) {
+    egui::ScrollArea::vertical()
+        .id_salt("workspace-tokens")
+        .auto_shrink(false)
+        .show(ui, |ui| tokens::section(ui, ed));
+}
+
 pub fn panel(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) {
     egui::ScrollArea::vertical()
         .auto_shrink(false)
         .show(ui, |ui| {
             ui.spacing_mut().item_spacing.y = 5.0;
-            section(ui, "Design");
-            ui.add_space(2.0);
             let ids = ed.top_selection();
             if ids.is_empty() {
                 nothing_selected(ui, ed);

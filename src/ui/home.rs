@@ -352,12 +352,11 @@ fn project_card(ui: &mut Ui, hv: &mut HomeView, e: &Entry) {
         let renaming = hv.renaming.as_ref().is_some_and(|(d, _)| *d == e.dir);
         if renaming {
             let (_, name) = hv.renaming.as_mut().unwrap();
+            let escape = ui.input(|i| i.key_pressed(egui::Key::Escape));
             let r = ui.add(egui::TextEdit::singleline(name).desired_width(CARD_W));
-            r.request_focus();
-            if r.lost_focus() {
+            if let Some(confirmed) = super::finish_rename(ui, &r, escape) {
                 let (dir, name) = hv.renaming.take().unwrap();
-                if !ui.input(|i| i.key_pressed(egui::Key::Escape)) && name.trim() != e.manifest.name
-                {
+                if confirmed && !name.trim().is_empty() && name.trim() != e.manifest.name {
                     hv.actions.push(HomeAction::Rename(dir, name));
                 }
             }

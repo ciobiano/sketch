@@ -14,6 +14,8 @@ use std::sync::Arc;
 
 pub const CANVAS_BG: Color = Color::rgb(0xee, 0xee, 0xf0);
 pub const GRID_DOT: Color = Color::rgb(0xcf, 0xcf, 0xd6);
+pub const WORKSPACE_BG: Color = Color::rgb(0x04, 0x04, 0x04);
+pub const WORKSPACE_GRID: Color = Color::rgb(0x14, 0x14, 0x14);
 pub const ACCENT: Color = Color::rgb(0x2f, 0x6f, 0xf3);
 pub const GUIDE: Color = Color::rgb(0xf2, 0x2f, 0x7a);
 
@@ -49,7 +51,7 @@ impl View<'_> {
 }
 
 /// Dot grid whose spacing adapts to the zoom so it never gets too dense or sparse.
-pub fn grid(mb: &mut MeshBuilder, v: &View) {
+fn grid(mb: &mut MeshBuilder, v: &View, dot: Color) {
     let z = v.camera.zoom;
     let mut spacing = 20.0;
     while spacing * z < 14.0 {
@@ -63,7 +65,7 @@ pub fn grid(mb: &mut MeshBuilder, v: &View) {
     let y0 = (vis.y / spacing).floor() as i64;
     let x1 = (vis.right() / spacing).ceil() as i64;
     let y1 = (vis.bottom() / spacing).ceil() as i64;
-    let color = rgba(GRID_DOT);
+    let color = rgba(dot);
     let r = 0.9;
     for yi in y0..=y1 {
         for xi in x0..=x1 {
@@ -285,7 +287,7 @@ pub fn draw_text(
 }
 
 /// Interactive overlay: hover, selection, handles, marquee, guides, labels, caret.
-pub fn overlay(mb: &mut MeshBuilder, ed: &Editor, offset: V2) {
+fn overlay(mb: &mut MeshBuilder, ed: &Editor, offset: V2, workspace: bool) {
     let v = View {
         doc: &ed.doc,
         camera: ed.camera,
@@ -296,28 +298,67 @@ pub fn overlay(mb: &mut MeshBuilder, ed: &Editor, offset: V2) {
     let z = ed.camera.zoom;
     mb.set_clip(Some(v.canvas_rect()));
 
-    // Frame name labels.
     for (id, r) in ed.frame_labels() {
         let n = ed.doc.get(id).unwrap();
         let selected = ed.selection.contains(&id);
-        let color = if selected {
-            accent
-        } else {
-            [0.42, 0.42, 0.46, 1.0]
-        };
         let r = r.translate(offset);
-        let mut name = n.name.clone();
-        let max_w = r.w;
-        while !name.is_empty() && text::layout(&name, 12.0, None, TextAlign::Left).width > max_w {
-            name.pop();
+        let mut label = n.name.clone();
+        let (inset, font_y, color) = if workspace {
+            let edge = if selected {
+                accent
+            } else {
+                rgba(Color::rgb(0x2e, 0x2e, 0x2e))
+            };
+            mb.fill_path(
+                &MeshBuilder::rounded_rect_path(r, 5.0),
+                edge,
+                FillRule::NonZero,
+            );
+            mb.fill_path(
+                &MeshBuilder::rounded_rect_path(r.inflate(-1.0), 4.0),
+                rgba(Color::rgb(0x14, 0x14, 0x14)),
+                FillRule::NonZero,
+            );
+            paint_frame_glyph(mb, v2(r.x + 13.0, r.y + r.h * 0.5));
+            (25.0, 4.0, rgba(Color::rgb(0xed, 0xed, 0xed)))
+        } else {
+            (
+                0.0,
+                4.0,
+                if selected {
+                    accent
+                } else {
+                    [0.42, 0.42, 0.46, 1.0]
+                },
+            )
+        };
+
+        let width = format!("  {}", fmt_num(n.rect.w));
+        let name_width = text::layout(&label, 12.0, None, TextAlign::Left).width;
+        if workspace && name_width + 65.0 < r.w {
+            draw_text(
+                mb,
+                &width,
+                11.0,
+                None,
+                TextAlign::Left,
+                v2(r.x + inset + name_width, r.y + 5.0),
+                1.0,
+                [0.63, 0.63, 0.63, 1.0],
+            );
+        }
+        while !label.is_empty()
+            && text::layout(&label, 12.0, None, TextAlign::Left).width > r.w - inset - 4.0
+        {
+            label.pop();
         }
         draw_text(
             mb,
-            &name,
+            &label,
             12.0,
             None,
             TextAlign::Left,
-            v2(r.x, r.y + 2.0),
+            v2(r.x + inset, r.y + font_y),
             1.0,
             color,
         );
@@ -585,8 +626,44 @@ fn fmt_num(x: f64) -> String {
     }
 }
 
-/// Full interactive canvas: background grid, document, overlay.
+fn paint_frame_glyph(mb: &mut MeshBuilder, center: V2) {
+    let color = rgba(Color::rgb(0xa1, 0xa1, 0xa1));
+    for gap in [-2.0, 2.0] {
+        for (a, b) in [
+            (center + v2(gap, -5.0), center + v2(gap, 5.0)),
+            (center + v2(-5.0, gap), center + v2(5.0, gap)),
+        ] {
+            let path = MeshBuilder::polygon_path(&[a, b], false);
+            mb.stroke_path(&path, 1.0, color, LineCap::Round);
+        }
+    }
+}
+
+/// Full interactive canvas for renderer and performance probes.
 pub fn canvas(ed: &Editor, cache: &mut SceneCache, offset: V2, show_grid: bool) -> CanvasFrame {
+    render_canvas(ed, cache, offset, show_grid, false, true, false)
+}
+
+pub(super) fn workspace_canvas(
+    ed: &Editor,
+    cache: &mut SceneCache,
+    offset: V2,
+    show_grid: bool,
+    preview: bool,
+    light_canvas: bool,
+) -> CanvasFrame {
+    render_canvas(ed, cache, offset, show_grid, true, light_canvas, preview)
+}
+
+fn render_canvas(
+    ed: &Editor,
+    cache: &mut SceneCache,
+    offset: V2,
+    show_grid: bool,
+    workspace: bool,
+    light_canvas: bool,
+    preview: bool,
+) -> CanvasFrame {
     let v = View {
         doc: &ed.doc,
         camera: ed.camera,
@@ -595,9 +672,24 @@ pub fn canvas(ed: &Editor, cache: &mut SceneCache, offset: V2, show_grid: bool) 
     };
     let mut under = MeshBuilder::default();
     under.set_clip(Some(v.canvas_rect()));
-    under.rect(v.canvas_rect(), rgba(CANVAS_BG));
-    if show_grid {
-        grid(&mut under, &v);
+    under.rect(
+        v.canvas_rect(),
+        rgba(if light_canvas {
+            CANVAS_BG
+        } else {
+            WORKSPACE_BG
+        }),
+    );
+    if show_grid && !preview {
+        grid(
+            &mut under,
+            &v,
+            if light_canvas {
+                GRID_DOT
+            } else {
+                WORKSPACE_GRID
+            },
+        );
     }
     let vis = ed.camera.visible_world(ed.viewport);
     let bucket = zoom_bucket(ed.camera.zoom);
@@ -616,7 +708,9 @@ pub fn canvas(ed: &Editor, cache: &mut SceneCache, offset: V2, show_grid: bool) 
         }
     };
     let mut over = MeshBuilder::default();
-    overlay(&mut over, ed, offset);
+    if !preview {
+        overlay(&mut over, ed, offset, workspace);
+    }
     CanvasFrame {
         under: under.finish(),
         items,

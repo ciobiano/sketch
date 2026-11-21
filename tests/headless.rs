@@ -556,17 +556,26 @@ fn app_full_ui_screenshot() {
         close(
             img.get_pixel(20, 600).0,
             {
-                let c = sketch_rs::theme::palette(false).sidebar;
+                let c = sketch_rs::theme::palette(true).sidebar;
                 Color::rgb(c.r(), c.g(), c.b())
             },
             3
         ),
-        "layers panel (light sidebar)"
+        "layers panel (dark sidebar)"
     );
     let bg = img.get_pixel(1300, 1600).0;
     assert!(
-        close(bg, CANVAS_BG, 3) || close(bg, scene::GRID_DOT, 4),
+        close(bg, scene::WORKSPACE_BG, 3) || close(bg, scene::WORKSPACE_GRID, 4),
         "canvas background {bg:?}"
+    );
+
+    // Remove a child layer while the editor and inspector are open, then redraw.
+    e.delete_selection();
+    let _ = frame::capture(g, &mut e, &mut st, [1440.0, 900.0], 1.0, |_| {});
+    assert!(e.doc.get(sel).is_none(), "child layer was deleted");
+    assert!(
+        e.selection.is_empty(),
+        "there is no stale selection after deletion"
     );
 }
 

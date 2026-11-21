@@ -625,8 +625,7 @@ impl Editor {
                     return None;
                 }
                 let sr = self.camera.world_rect_to_screen(&self.doc.world_rect(*id)?);
-                let w = text::layout(&n.name, 12.0, None, TextAlign::Left).width;
-                Some((*id, hit::frame_label_rect(&sr, w.min(sr.w.max(24.0)))))
+                Some((*id, hit::frame_label_rect(&sr)))
             })
             .collect()
     }

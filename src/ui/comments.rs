@@ -115,6 +115,8 @@ pub struct CommentsUi {
     peek: Option<(String, Rect)>,
     /// Pins drawn in the last frame, with the screen point each one marks.
     pub drawn: Vec<(String, Pos2)>,
+    /// The conversation is in the workspace sidebar instead of the pin popover.
+    docked: bool,
 }
 
 impl CommentsUi {
@@ -131,6 +133,7 @@ impl CommentsUi {
 
     /// Open a thread's popover.
     pub fn show(&mut self, ed: &mut Editor, id: &str) {
+        self.docked = false;
         if self.open.as_deref() != Some(id) {
             self.close(ed);
             self.open = Some(id.to_string());
@@ -141,6 +144,7 @@ impl CommentsUi {
     }
 
     pub fn close(&mut self, ed: &Editor) {
+        self.docked = false;
         if let Some(mut n) = self.new.take() {
             n.composer.discard(ed);
         }
@@ -340,7 +344,7 @@ pub fn canvas(ctx: &egui::Context, ed: &mut Editor, st: &mut CommentsUi, canvas:
         .filter(|t| t.page == page && !t.messages.is_empty())
         // Resolved threads keep their pin (muted), so earlier discussions stay one click
         // away. The panel's filter only narrows the list.
-        .filter(|t| show_all || st.open.as_deref() == Some(&t.id))
+        .filter(|t| show_all || (!st.docked && st.open.as_deref() == Some(&t.id)))
         .map(|t| {
             (
                 t.id.clone(),
@@ -400,7 +404,7 @@ pub fn canvas(ctx: &egui::Context, ed: &mut Editor, st: &mut CommentsUi, canvas:
     }
     // Where a click with the Comment tool will put the comment.
     if commenting
-        && st.new.is_none()
+        && (st.new.is_none() || st.docked)
         && st.peek.is_none()
         && let Some(p) = pointer
         && canvas.contains(p)
@@ -415,7 +419,9 @@ pub fn canvas(ctx: &egui::Context, ed: &mut Editor, st: &mut CommentsUi, canvas:
         };
         pin(ctx, "ghost", p, &look, false, true);
     }
-    if let Some(n) = &st.new {
+    if let Some(n) = &st.new
+        && !st.docked
+    {
         let at = to_screen(n.pin.point, ed);
         let look = Look {
             author: ed.me.clone(),
@@ -424,14 +430,18 @@ pub fn canvas(ctx: &egui::Context, ed: &mut Editor, st: &mut CommentsUi, canvas:
         };
         pin(ctx, "new", at, &look, true, false);
         popover(ctx, at, canvas, |ui| new_thread(ui, ed, st, &mut acts));
-    } else if let Some(id) = st.open.clone()
+    } else if !st.docked
+        && let Some(id) = st.open.clone()
         && let Some(t) = ed.comments.thread(&id).cloned()
     {
         let at = to_screen(t.world_point(&ed.doc), ed);
         popover(ctx, at, canvas, |ui| thread_view(ui, ed, st, &t, &mut acts));
     }
     send_bar(ctx, ed, canvas, &mut acts);
-    if (st.new.is_some() || st.open.is_some()) && ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+    if !st.docked
+        && (st.new.is_some() || st.open.is_some())
+        && ctx.input(|i| i.key_pressed(egui::Key::Escape))
+    {
         acts.push(Act::Close);
     }
     apply(ed, st, acts);
@@ -738,6 +748,7 @@ fn new_thread(ui: &mut Ui, ed: &mut Editor, st: &mut CommentsUi, acts: &mut Vec<
                 hint: "Add a comment. Type @ to mention someone",
                 focus,
                 can_attach,
+                docked: false,
             },
         );
         if sent {
@@ -845,6 +856,7 @@ fn thread_view(ui: &mut Ui, ed: &mut Editor, st: &mut CommentsUi, t: &Thread, ac
                 },
                 focus,
                 can_attach,
+                docked: false,
             },
         );
         if sent {
@@ -1045,6 +1057,7 @@ struct ComposerOpts<'a> {
     hint: &'a str,
     focus: bool,
     can_attach: bool,
+    docked: bool,
 }
 
 /// Names that complete the @word being typed at the end of the text, and where that @ is.
@@ -1140,13 +1153,15 @@ fn composer(ui: &mut Ui, ed: &mut Editor, c: &mut Composer, o: ComposerOpts) -> 
             ui.set_width(ui.available_width());
             ui.horizontal_top(|ui| {
                 ui.spacing_mut().item_spacing.x = 8.0;
-                avatar(ui, o.me, 22.0);
+                if !o.docked {
+                    avatar(ui, o.me, 22.0);
+                }
                 let edit = egui::TextEdit::multiline(&mut c.text)
                     .id(o.id)
                     .hint_text(o.hint)
                     .frame(egui::Frame::NONE)
                     .margin(egui::Margin::symmetric(0, 3))
-                    .desired_rows(1)
+                    .desired_rows(if o.docked { 3 } else { 1 })
                     .desired_width(f32::INFINITY)
                     .font(egui::FontId::proportional(theme::BODY))
                     .return_key(egui::KeyboardShortcut::new(
@@ -1206,7 +1221,7 @@ fn composer(ui: &mut Ui, ed: &mut Editor, c: &mut Composer, o: ComposerOpts) -> 
                 }
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     let ready = !(c.text.trim().is_empty() && c.files.is_empty());
-                    if send_button(ui, ready).clicked() && ready {
+                    if send_button(ui, ready, o.docked).clicked() && ready {
                         sent = true;
                     }
                 });
@@ -1282,9 +1297,29 @@ fn composer(ui: &mut Ui, ed: &mut Editor, c: &mut Composer, o: ComposerOpts) -> 
 }
 
 /// A round send button with an up arrow; grey until there is something to send.
-fn send_button(ui: &mut Ui, ready: bool) -> egui::Response {
+fn send_button(ui: &mut Ui, ready: bool, docked: bool) -> egui::Response {
     let p = theme::pal(ui);
     let (r, resp) = ui.allocate_exact_size(vec2(26.0, 26.0), Sense::click());
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, ready, "Send"));
+    if docked {
+        let fill = if ready {
+            Color32::from_gray(237)
+        } else {
+            p.control
+        };
+        ui.painter().rect_filled(r, 7, fill);
+        theme::paint_icon(
+            ui.painter(),
+            r.shrink(4.0),
+            Icon::Send,
+            if ready {
+                Color32::from_gray(12)
+            } else {
+                p.tertiary
+            },
+        );
+        return resp.on_hover_text("Send (Return)");
+    }
     let fill = if !ready {
         p.control
     } else if resp.hovered() {
@@ -1568,6 +1603,251 @@ fn apply(ed: &mut Editor, st: &mut CommentsUi, acts: Vec<Act>) {
         ed.meta_dirty = true;
         ed.revision += 1;
     }
+}
+
+/// Agent conversations are project comment threads and use the same delivery and drafts.
+pub(super) fn agent_panel(ui: &mut Ui, ed: &mut Editor, st: &mut CommentsUi) {
+    let p = theme::pal(ui);
+    let known = ed.comments.mentionable(&ed.me);
+    let mut threads: Vec<_> = ed
+        .comments
+        .threads
+        .iter()
+        .filter(|thread| {
+            ed.pages.iter().any(|page| page.id == thread.page)
+                && thread.messages.iter().any(|message| {
+                    std::iter::once(&message.author)
+                        .chain(&message.mentions)
+                        .any(|id| {
+                            known
+                                .iter()
+                                .any(|author| author.kind == AuthorKind::Agent && &author.id == id)
+                        })
+                })
+        })
+        .map(|thread| {
+            (
+                thread.id.clone(),
+                conversation_title(thread),
+                thread.updated,
+            )
+        })
+        .collect();
+    threads.sort_by_key(|(_, _, updated)| std::cmp::Reverse(*updated));
+
+    if st.docked
+        && (st
+            .open
+            .as_ref()
+            .is_some_and(|id| ed.comments.thread(id).is_none())
+            || st
+                .new
+                .as_ref()
+                .is_some_and(|draft| draft.pin.page != ed.active_page_id()))
+    {
+        st.close(ed);
+    }
+    if st.open.is_none() && st.new.is_none() {
+        if let Some((id, _, _)) = threads.first() {
+            st.show(ed, id);
+            st.docked = true;
+            st.focus = false;
+        } else {
+            start_conversation(ed, st, None);
+            st.focus = false;
+        }
+    }
+
+    ui.horizontal(|ui| {
+        let current = st.open.clone().filter(|_| st.docked);
+        let label = threads
+            .iter()
+            .find(|(id, _, _)| Some(id.as_str()) == current.as_deref())
+            .map_or("New conversation", |(_, title, _)| title);
+        let choose = ui.add_sized(
+            [(ui.available_width() - 38.0).max(0.0), 30.0],
+            egui::Button::new(format!("{label}  ⌄")).truncate(),
+        );
+        egui::Popup::menu(&choose).show(|ui| {
+            if threads.is_empty() {
+                ui.label(RichText::new("No agent conversations yet").weak());
+            }
+            for (id, title, _) in &threads {
+                if ui
+                    .selectable_label(current.as_deref() == Some(id), title)
+                    .clicked()
+                {
+                    st.show(ed, id);
+                    st.docked = true;
+                    ui.close();
+                }
+            }
+        });
+        let plus =
+            theme::icon_button(ui, Icon::Plus, 30.0, false).on_hover_text("New agent conversation");
+        egui::Popup::menu(&plus).show(|ui| {
+            if ui.button("New conversation").clicked() {
+                start_conversation(ed, st, None);
+                ui.close();
+            }
+            for agent in &ed.comments.connected_agents {
+                if ui.button(&agent.name).clicked() {
+                    let name = agent.name.clone();
+                    start_conversation(ed, st, Some(&name));
+                    ui.close();
+                    break;
+                }
+            }
+        });
+    });
+    ui.add_space(6.0);
+    if !st.docked {
+        ui.label(RichText::new("Choose a conversation to read it here.").weak());
+        return;
+    }
+    take_picked(ed, st);
+    let thread = st
+        .open
+        .as_deref()
+        .and_then(|id| ed.comments.thread(id))
+        .cloned();
+    let mut acts = Vec::new();
+    let composer_max = (ui.available_height() * 0.48).max(100.0);
+    egui::Panel::bottom(Id::new("agent-composer"))
+        .default_size(100.0)
+        .size_range(98.0..=composer_max)
+        .frame(egui::Frame::NONE)
+        .show_separator_line(false)
+        .show(ui, |ui| {
+            egui::ScrollArea::vertical()
+                .id_salt("agent-composer-scroll")
+                .max_height(composer_max)
+                .auto_shrink([false, true])
+                .show(ui, |ui| {
+                    let focus = std::mem::take(&mut st.focus);
+                    let me = ed.me.clone();
+                    let can_attach = ed.project_dir.is_some();
+                    if let Some(draft) = &mut st.new {
+                        let sent = composer(
+                            ui,
+                            ed,
+                            &mut draft.composer,
+                            ComposerOpts {
+                                id: Id::new("agent-compose-new"),
+                                me: &me,
+                                known: &known,
+                                hint: "Ask about this design…",
+                                focus,
+                                can_attach,
+                                docked: true,
+                            },
+                        );
+                        if sent {
+                            if comments::parse_mentions(&draft.composer.text, &known)
+                                .iter()
+                                .any(|id| {
+                                    known
+                                        .iter()
+                                        .any(|a| &a.id == id && a.kind == AuthorKind::Agent)
+                                })
+                            {
+                                acts.push(Act::Post);
+                            } else {
+                                ed.status =
+                                    "Mention an agent with @ to send this conversation".into();
+                            }
+                        }
+                    } else if let Some(t) = &thread
+                        && composer(
+                            ui,
+                            ed,
+                            &mut st.reply,
+                            ComposerOpts {
+                                id: Id::new(("agent-compose-reply", &t.id)),
+                                me: &me,
+                                known: &known,
+                                hint: "Ask about this design…",
+                                focus,
+                                can_attach,
+                                docked: true,
+                            },
+                        )
+                    {
+                        acts.push(Act::Reply(t.id.clone()));
+                    }
+                });
+        });
+    if let Some(t) = &thread {
+        egui::ScrollArea::vertical()
+            .id_salt(&t.id)
+            .stick_to_bottom(true)
+            .auto_shrink([false, false])
+            .show(ui, |ui| {
+                let now = now_ms();
+                if let Some(page) = ed.pages.iter().position(|page| page.id == t.page)
+                    && ui
+                        .button(format!("Show on {}", ed.pages[page].name))
+                        .clicked()
+                {
+                    reveal(ed, st, page, &t.id);
+                    st.docked = true;
+                }
+                for (index, m) in t.messages.iter().enumerate() {
+                    ui.add_space(7.0);
+                    let fill = if author(ed, &m.author).kind != AuthorKind::Agent {
+                        p.control
+                    } else {
+                        Color32::TRANSPARENT
+                    };
+                    egui::Frame::NONE
+                        .fill(fill)
+                        .corner_radius(8)
+                        .inner_margin(7)
+                        .show(ui, |ui| {
+                            ui.set_width(ui.available_width());
+                            message(ui, ed, t, index, &known, now, &mut acts);
+                        });
+                }
+            });
+    } else {
+        ui.label(RichText::new("Mention an agent with @ to send your message.").color(p.secondary));
+    }
+    apply(ed, st, acts);
+}
+
+fn conversation_title(thread: &Thread) -> String {
+    let first = thread
+        .messages
+        .first()
+        .map_or("", |m| m.text.lines().next().unwrap_or(""));
+    let mut chars = first.chars();
+    let mut short: String = chars.by_ref().take(38).collect();
+    if chars.next().is_some() {
+        short.push('…');
+    }
+    if short.trim().is_empty() {
+        "Conversation".into()
+    } else {
+        short
+    }
+}
+
+fn start_conversation(ed: &Editor, st: &mut CommentsUi, agent: Option<&str>) {
+    let node = (ed.selection.len() == 1).then(|| ed.selection[0]);
+    let world = node.and_then(|id| ed.doc.world_rect(id)).map_or_else(
+        || ed.camera.screen_to_world(ed.viewport * 0.5),
+        |r| r.center(),
+    );
+    st.close(ed);
+    st.new = Some(NewThread {
+        pin: Pin::new(&ed.doc, ed.active_page_id(), node, world),
+        composer: Composer {
+            text: agent.map_or_else(String::new, |name| format!("@{name} ")),
+            ..Composer::default()
+        },
+    });
+    st.docked = true;
+    st.focus = true;
 }
 
 /// A row of options, one selected, on a sunken track.

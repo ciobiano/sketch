@@ -20,6 +20,8 @@ pub struct Layout {
     pub output: egui::FullOutput,
     /// Canvas rect in logical px.
     pub canvas: egui::Rect,
+    preview: bool,
+    light_canvas: bool,
 }
 
 /// Run the egui UI, then sync the editor viewport to the canvas rect.
@@ -29,6 +31,14 @@ pub fn layout(
     ed: &mut Editor,
     st: &mut UiState,
 ) -> Layout {
+    let mode = if st.home.is_some() {
+        egui::ThemePreference::System
+    } else {
+        egui::ThemePreference::Dark
+    };
+    if ctx.options(|o| o.theme_preference) != mode {
+        ctx.set_theme(mode);
+    }
     let mut canvas = egui::Rect::NOTHING;
     let output = ctx.run_ui(input, |ui| {
         canvas = ui::draw(ui, ed, st);
@@ -41,7 +51,12 @@ pub fn layout(
         ed.pending_fit = false;
         ed.zoom_to_fit();
     }
-    Layout { output, canvas }
+    Layout {
+        output,
+        canvas,
+        preview: st.preview,
+        light_canvas: st.light_canvas,
+    }
 }
 
 impl Painter {
@@ -69,7 +84,14 @@ impl Painter {
     ) {
         let ppp = layout.output.pixels_per_point;
         let offset = v2(layout.canvas.min.x as f64, layout.canvas.min.y as f64);
-        let frame = scene::canvas(ed, &mut self.cache, offset, show_grid);
+        let frame = scene::workspace_canvas(
+            ed,
+            &mut self.cache,
+            offset,
+            show_grid,
+            layout.preview,
+            layout.light_canvas,
+        );
         let mut enc = device.create_command_encoder(&Default::default());
         let bg = if self.transparent {
             [0.0; 4]
