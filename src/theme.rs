@@ -132,14 +132,26 @@ pub fn pal(ui: &egui::Ui) -> Palette {
 /// Inter (Regular/Medium/SemiBold) as the proportional family, egui's fonts as fallbacks.
 pub fn install_fonts(ctx: &egui::Context) {
     let mut fonts = egui::FontDefinitions::default();
+    let hinting_target =
+        egui::epaint::text::HintingTarget::Smooth(egui::epaint::text::SmoothHinting {
+            light: true,
+            symmetric_rendering: false,
+            ..Default::default()
+        });
     for (name, bytes) in [
         ("Inter", INTER_REGULAR),
         ("Inter-Medium", INTER_MEDIUM),
         ("Inter-SemiBold", INTER_SEMIBOLD),
     ] {
-        fonts
-            .font_data
-            .insert(name.into(), Arc::new(FontData::from_static(bytes)));
+        fonts.font_data.insert(
+            name.into(),
+            Arc::new(
+                FontData::from_static(bytes).tweak(egui::epaint::text::FontTweak {
+                    hinting_target,
+                    ..Default::default()
+                }),
+            ),
+        );
     }
     let fallbacks: Vec<String> = fonts
         .families
@@ -298,6 +310,12 @@ pub enum Icon {
     Folder,
     Play,
     Send,
+    VectorPath,
+    LayoutRow,
+    LayoutColumn,
+    Stack,
+    Divider,
+    Connector,
     Pointer,
     Hand,
     Frame,
@@ -389,6 +407,20 @@ pub fn paint_icon(painter: &egui::Painter, rect: Rect, icon: Icon, color: Color3
         | Icon::Page
         | Icon::Image
         | Icon::Lock
+        | Icon::Ellipse
+        | Icon::Line
+        | Icon::VectorPath
+        | Icon::LayoutRow
+        | Icon::LayoutColumn
+        | Icon::Stack
+        | Icon::Divider
+        | Icon::Diamond
+        | Icon::Polygon
+        | Icon::Star
+        | Icon::Arrow
+        | Icon::Connector
+        | Icon::Sticky
+        | Icon::Ink
         | Icon::LockOpen => unreachable!("handled by the SVG icon set"),
         Icon::Pointer => {
             closed(&[
@@ -400,12 +432,6 @@ pub fn paint_icon(painter: &egui::Painter, rect: Rect, icon: Icon, color: Color3
                 pt(7.3, 10.6),
                 pt(4.5, 13.0),
             ]);
-        }
-        Icon::Ellipse => {
-            painter.circle_stroke(c, 5.75 * u, st);
-        }
-        Icon::Line => {
-            line(&[pt(3.0, 13.0), pt(13.0, 3.0)]);
         }
         Icon::Pencil => {
             closed(&[
@@ -427,18 +453,6 @@ pub fn paint_icon(painter: &egui::Painter, rect: Rect, icon: Icon, color: Color3
             ]);
             line(&[pt(5.8, 6.2), pt(10.3, 10.7)]);
             line(&[pt(8.0, 13.0), pt(14.0, 13.0)]);
-        }
-        Icon::Ink => {
-            let pts: Vec<Pos2> = (0..=16)
-                .map(|i| {
-                    let t = i as f32 / 16.0;
-                    pt(
-                        2.5 + 11.0 * t,
-                        8.0 - 3.2 * (t * std::f32::consts::TAU).sin(),
-                    )
-                })
-                .collect();
-            line(&pts);
         }
         Icon::Eye | Icon::EyeSlash => {
             let mut top = arc(pt(8.0, 13.5), 7.5 * u, -2.4, -0.74, 10);
@@ -475,19 +489,6 @@ pub fn paint_icon(painter: &egui::Painter, rect: Rect, icon: Icon, color: Color3
         }
         Icon::Minus => {
             line(&[pt(3.0, 8.0), pt(13.0, 8.0)]);
-        }
-        Icon::Polygon => {
-            closed(&[pt(8.0, 2.0), pt(14.0, 13.5), pt(2.0, 13.5)]);
-        }
-        Icon::Star => {
-            let pts: Vec<Pos2> = (0..10)
-                .map(|i| {
-                    let a = -std::f32::consts::FRAC_PI_2 + i as f32 * std::f32::consts::PI / 5.0;
-                    let r = if i % 2 == 0 { 6.5 } else { 2.8 };
-                    pt(8.0 + a.cos() * r, 8.5 + a.sin() * r)
-                })
-                .collect();
-            closed(&pts);
         }
         Icon::Component | Icon::Instance => {
             let d = [
@@ -603,23 +604,6 @@ pub fn paint_icon(painter: &egui::Painter, rect: Rect, icon: Icon, color: Color3
             line(&[pt(4.0, 8.0), pt(12.0, 8.0)]);
             line(&[pt(6.0, 6.0), pt(4.0, 8.0), pt(6.0, 10.0)]);
             line(&[pt(10.0, 6.0), pt(12.0, 8.0), pt(10.0, 10.0)]);
-        }
-        Icon::Arrow => {
-            line(&[pt(3.0, 13.0), pt(13.0, 3.0)]);
-            line(&[pt(7.5, 3.0), pt(13.0, 3.0), pt(13.0, 8.5)]);
-        }
-        Icon::Sticky => {
-            closed(&[
-                pt(2.5, 2.5),
-                pt(13.5, 2.5),
-                pt(13.5, 9.5),
-                pt(9.5, 13.5),
-                pt(2.5, 13.5),
-            ]);
-            line(&[pt(13.5, 9.5), pt(9.5, 9.5), pt(9.5, 13.5)]);
-        }
-        Icon::Diamond => {
-            closed(&[pt(8.0, 1.8), pt(14.2, 8.0), pt(8.0, 14.2), pt(1.8, 8.0)]);
         }
         Icon::Laser => {
             line(&[pt(2.5, 13.5), pt(9.5, 6.5)]);

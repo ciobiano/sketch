@@ -426,33 +426,77 @@ pub fn drop_layer(ed: &mut Editor, id: NodeId, d: LayerDrop) {
     ed.selection = vec![id];
 }
 
-fn node_icon(n: &crate::model::Node) -> Icon {
+fn node_icon(ed: &Editor, n: &crate::model::Node) -> Icon {
+    use crate::model::{Direction, Head, Paint};
+
     if n.component {
         return Icon::Component;
     }
-    if n.instance.is_some() && n.parent.is_none_or(|_| n.is_frame()) && n.is_frame() {
+    if ed.is_instance_root(n.id) {
         return Icon::Instance;
     }
-    if n.style
-        .fills
-        .iter()
-        .any(|p| matches!(p, crate::model::Paint::Image { .. }))
-        && matches!(n.kind, NodeKind::Rect)
-    {
-        return Icon::Image;
-    }
-    kind_icon(&n.kind)
-}
+    let image = || {
+        n.style
+            .fills
+            .iter()
+            .any(|paint| matches!(paint, Paint::Image { .. }))
+    };
 
-fn kind_icon(k: &NodeKind) -> Icon {
-    match k {
+    match &n.kind {
+        NodeKind::Frame { .. } if n.children.is_empty() && image() => Icon::Image,
+        NodeKind::Frame { clip: false }
+            if n.children.is_empty()
+                && n.layout.is_some()
+                && (!n.style.fills.is_empty() || n.style.stroke.is_some()) =>
+        {
+            // HTML imports represent decorative boxes as frames. Identify their visible
+            // shape without changing the editable node or its layout settings.
+            let (w, h) = (n.rect.w, n.rect.h);
+            if h <= 2.0 && w >= 4.0 * h {
+                Icon::Divider
+            } else if w <= 2.0 && h >= 4.0 * w {
+                Icon::Line
+            } else if w.min(h) > 0.0
+                && (w - h).abs() <= w.min(h) * 0.1
+                && n.style
+                    .corner_radii()
+                    .iter()
+                    .all(|radius| *radius >= w.min(h) * 0.48)
+            {
+                Icon::Ellipse
+            } else {
+                Icon::Rect
+            }
+        }
+        NodeKind::Frame { clip } if !n.children.is_empty() && (!clip || n.parent.is_some()) => {
+            match &n.layout {
+                Some(layout) if layout.direction == Direction::Horizontal => Icon::LayoutRow,
+                Some(_) => Icon::LayoutColumn,
+                None if !clip => Icon::Stack,
+                None => Icon::Frame,
+            }
+        }
+        NodeKind::Frame { .. } => Icon::Frame,
         NodeKind::Group => Icon::Group,
+        NodeKind::Connector {
+            start,
+            end,
+            start_head,
+            end_head,
+            ..
+        } if start.is_some()
+            || end.is_some()
+            || (*start_head == Head::None && *end_head == Head::None) =>
+        {
+            Icon::Connector
+        }
         NodeKind::Connector { .. } => Icon::Arrow,
         NodeKind::Sticky { .. } => Icon::Sticky,
-        NodeKind::Path { .. } => Icon::Pen,
+        NodeKind::Path { .. } => Icon::VectorPath,
+        NodeKind::Polygon { sides: 4 } => Icon::Diamond,
         NodeKind::Polygon { .. } => Icon::Polygon,
         NodeKind::Star { .. } => Icon::Star,
-        NodeKind::Frame { .. } => Icon::Frame,
+        NodeKind::Rect if image() => Icon::Image,
         NodeKind::Rect => Icon::Rect,
         NodeKind::Ellipse => Icon::Ellipse,
         NodeKind::Line { .. } => Icon::Line,
@@ -538,7 +582,12 @@ fn layer_row(
         }
     }
     x += 16.0;
-    theme::paint_icon(ui.painter(), sq(x, theme::ROW_GLYPH), node_icon(&n), fg2);
+    theme::paint_icon(
+        ui.painter(),
+        sq(x, theme::ROW_GLYPH),
+        node_icon(ed, &n),
+        fg2,
+    );
     x += 20.0;
 
     // Trailing eye / lock buttons: always shown when hidden or locked, otherwise on hover.
@@ -770,5 +819,47 @@ fn help(ctx: &egui::Context, st: &mut UiState, canvas: egui::Rect) {
         });
     if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
         st.show_help = false;
+    }
+}
+
+#[cfg(test)]
+mod layer_icon_tests {
+    use super::*;
+    use crate::geom::Rect;
+    use crate::model::{AutoLayout, Direction, Node, Paint};
+
+    #[test]
+    fn uses_visible_shapes_for_imported_leaves_and_layout_for_containers() {
+        let ed = Editor::default();
+        let mut layer = Node::new(
+            NodeId(1),
+            NodeKind::Frame { clip: false },
+            Rect::new(0.0, 0.0, 24.0, 24.0),
+        );
+        layer.name = "Frame".into();
+        layer.layout = Some(AutoLayout::default());
+        layer.style.fills = vec![Paint::solid(Color::WHITE)];
+        assert_eq!(node_icon(&ed, &layer), Icon::Rect);
+
+        layer.style.corner_radius = 12.0;
+        assert_eq!(node_icon(&ed, &layer), Icon::Ellipse);
+        layer.rect.h = 1.0;
+        assert_eq!(node_icon(&ed, &layer), Icon::Divider);
+
+        layer.children.push(NodeId(2));
+        assert_eq!(node_icon(&ed, &layer), Icon::LayoutRow);
+        layer.layout.as_mut().unwrap().direction = Direction::Vertical;
+        assert_eq!(node_icon(&ed, &layer), Icon::LayoutColumn);
+        layer.kind = NodeKind::Frame { clip: true };
+        assert_eq!(node_icon(&ed, &layer), Icon::Frame);
+
+        layer.children.clear();
+        layer.kind = NodeKind::Polygon { sides: 4 };
+        assert_eq!(node_icon(&ed, &layer), Icon::Diamond);
+        layer.kind = NodeKind::Path {
+            subpaths: Vec::new(),
+            fill_rule: Default::default(),
+        };
+        assert_eq!(node_icon(&ed, &layer), Icon::VectorPath);
     }
 }

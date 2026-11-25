@@ -1,11 +1,8 @@
 //! Hand-drawn workspace glyphs on a common 24-point grid.
 
 use super::Icon;
-use crate::io::svg_import;
-use crate::render::{draw, tess::Tess};
-use egui::{Color32, Mesh, Painter, Rect, epaint::WHITE_UV, pos2};
-use std::collections::HashMap;
-use std::sync::{Mutex, OnceLock};
+use egui::{Color32, ColorImage, Id, Painter, Rect, TextureHandle, TextureOptions, pos2, vec2};
+use resvg::tiny_skia::{Pixmap, Transform};
 
 macro_rules! glyph {
     ($name:literal) => {
@@ -34,43 +31,64 @@ pub(super) fn paint(painter: &Painter, rect: Rect, icon: Icon, color: Color32) -
         Icon::Group => glyph!("group"),
         Icon::Sidebar => glyph!("sidebar"),
         Icon::SidebarRight => glyph!("sidebar-right"),
+        Icon::Ellipse => glyph!("ellipse"),
+        Icon::Line => glyph!("line"),
+        Icon::Divider => glyph!("divider"),
+        Icon::VectorPath => glyph!("path"),
+        Icon::LayoutRow => glyph!("row"),
+        Icon::LayoutColumn => glyph!("column"),
+        Icon::Stack => glyph!("stack"),
+        Icon::Diamond => glyph!("diamond"),
+        Icon::Polygon => glyph!("polygon"),
+        Icon::Star => glyph!("star"),
+        Icon::Arrow => glyph!("arrow"),
+        Icon::Connector => glyph!("connector"),
+        Icon::Sticky => glyph!("sticky"),
+        Icon::Ink => glyph!("ink"),
         _ => return false,
     };
-    static CACHE: OnceLock<Mutex<HashMap<Icon, Mesh>>> = OnceLock::new();
-    let mut cache = CACHE.get_or_init(Mutex::default).lock().unwrap();
-    let mut mesh = cache.entry(icon).or_insert_with(|| tessellate(svg)).clone();
-    drop(cache);
-    let side = rect.width().min(rect.height());
-    let origin = rect.center() - egui::Vec2::splat(side * 0.5);
-    for vertex in &mut mesh.vertices {
-        vertex.pos = origin + vertex.pos.to_vec2() * (side / 24.0);
-        vertex.color = color;
+    if !painter.is_visible() || color == Color32::TRANSPARENT {
+        return true;
     }
-    painter.add(egui::Shape::mesh(mesh));
+    let ctx = painter.ctx();
+    let scale = ctx.pixels_per_point();
+    let pixels = (rect.width().min(rect.height()) * scale)
+        .round()
+        .clamp(1.0, 128.0) as u32;
+    let id = Id::new(("workspace-glyph", icon, pixels));
+    let cached = ctx.data(|data| data.get_temp::<TextureHandle>(id));
+    let texture = cached.unwrap_or_else(|| {
+        let texture = ctx.load_texture(
+            format!("{icon:?} {pixels}px"),
+            rasterize(svg, pixels),
+            TextureOptions::LINEAR,
+        );
+        ctx.data_mut(|data| data.insert_temp(id, texture.clone()));
+        texture
+    });
+    let side = pixels as f32 / scale;
+    let origin = rect.center() - vec2(side / 2.0, side / 2.0);
+    let origin = pos2(
+        (origin.x * scale).round() / scale,
+        (origin.y * scale).round() / scale,
+    );
+    painter.image(
+        texture.id(),
+        Rect::from_min_size(origin, vec2(side, side)),
+        Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)),
+        color,
+    );
     true
 }
 
-fn tessellate(svg: &str) -> Mesh {
-    let mut tess = Tess::new(4.0);
-    let mut mesh = Mesh::default();
-    for node in svg_import::parse(svg).expect("valid bundled icon SVG") {
-        let ops = draw::node_draw(&node, node.rect, 1.0).ops;
-        for piece in tess.ops(&ops) {
-            let base = mesh.vertices.len() as u32;
-            mesh.vertices.extend(
-                piece
-                    .mesh
-                    .vertices
-                    .iter()
-                    .map(|vertex| egui::epaint::Vertex {
-                        pos: pos2(vertex.pos[0], vertex.pos[1]),
-                        uv: WHITE_UV,
-                        color: Color32::WHITE,
-                    }),
-            );
-            mesh.indices
-                .extend(piece.mesh.indices.iter().map(|i| i + base));
-        }
-    }
-    mesh
+fn rasterize(svg: &str, pixels: u32) -> ColorImage {
+    let tree = usvg::Tree::from_str(svg, &usvg::Options::default()).expect("valid bundled glyph");
+    let scale = pixels as f32 / tree.size().width();
+    let mut pixmap = Pixmap::new(pixels, pixels).expect("small square glyph texture");
+    resvg::render(
+        &tree,
+        Transform::from_scale(scale, scale),
+        &mut pixmap.as_mut(),
+    );
+    ColorImage::from_rgba_premultiplied([pixels as usize; 2], pixmap.data())
 }
