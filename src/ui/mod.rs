@@ -82,8 +82,8 @@ pub(crate) fn from32(c: Color32) -> Color {
 pub(crate) fn section(ui: &mut Ui, title: &str) {
     ui.label(
         RichText::new(title)
-            .font(theme::semibold(theme::SECONDARY))
-            .color(theme::pal(ui).secondary),
+            .font(theme::semibold(theme::CONTROL_LABEL))
+            .color(theme::pal(ui).text),
     );
 }
 
@@ -233,6 +233,7 @@ fn layers(ui: &mut Ui, ed: &mut Editor, st: &mut UiState, compact: bool) {
     ui.add_space(6.0);
     let p = theme::pal(ui);
     ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = if compact { 4.0 } else { 8.0 };
         // 0 layers, 1 library, 2 comments.
         let tab = if st.show_comments {
             2
@@ -244,7 +245,11 @@ fn layers(ui: &mut Ui, ed: &mut Editor, st: &mut UiState, compact: bool) {
             let r = ui.add(
                 egui::Label::new(
                     RichText::new(label)
-                        .font(theme::semibold(theme::SECONDARY))
+                        .font(if on {
+                            theme::semibold(theme::CONTROL_LABEL)
+                        } else {
+                            egui::FontId::proportional(theme::CONTROL_LABEL)
+                        })
                         .color(if on { p.text } else { p.secondary }),
                 )
                 .sense(egui::Sense::click()),
@@ -261,13 +266,13 @@ fn layers(ui: &mut Ui, ed: &mut Editor, st: &mut UiState, compact: bool) {
             ui.spacing_mut().item_spacing.x = 0.0;
             let some = !ed.selection.is_empty();
             ui.add_enabled_ui(some, |ui| {
-                if theme::icon_button(ui, Icon::ChevronDown, 20.0, false)
+                if theme::icon_button(ui, Icon::ChevronDown, 16.0, false)
                     .on_hover_text("Send backward")
                     .clicked()
                 {
                     ed.run(Action::Backward);
                 }
-                if theme::icon_button(ui, Icon::ChevronUp, 20.0, false)
+                if theme::icon_button(ui, Icon::ChevronUp, 16.0, false)
                     .on_hover_text("Bring forward")
                     .clicked()
                 {
@@ -533,7 +538,7 @@ fn layer_row(
         }
     }
     x += 16.0;
-    theme::paint_icon(ui.painter(), sq(x, 14.0), node_icon(&n), fg2);
+    theme::paint_icon(ui.painter(), sq(x, theme::ROW_GLYPH), node_icon(&n), fg2);
     x += 20.0;
 
     // Trailing eye / lock buttons: always shown when hidden or locked, otherwise on hover.
@@ -609,8 +614,8 @@ fn layer_row(
             }
         }
     } else {
-        let font = if n.is_frame() {
-            theme::medium(theme::BODY)
+        let font = if selected || (depth == 0 && n.is_container()) {
+            theme::semibold(theme::BODY)
         } else {
             egui::FontId::proportional(theme::BODY)
         };

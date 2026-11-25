@@ -1,4 +1,4 @@
-// Outline vectors from hicon-react 1.0.0. The Hand glyph was drawn for Sketch.
+//! Hand-drawn workspace glyphs on a common 24-point grid.
 
 use super::Icon;
 use crate::io::svg_import;
@@ -7,28 +7,33 @@ use egui::{Color32, Mesh, Painter, Rect, epaint::WHITE_UV, pos2};
 use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
 
-macro_rules! hicon {
+macro_rules! glyph {
     ($name:literal) => {
-        include_str!(concat!("../../assets/icons/hicon/", $name, ".svg"))
+        include_str!(concat!("../../assets/icons/editing/", $name, ".svg"))
     };
 }
 
 pub(super) fn paint(painter: &Painter, rect: Rect, icon: Icon, color: Color32) -> bool {
     let svg = match icon {
-        Icon::Dashboard => hicon!("dashboard"),
-        Icon::Page => hicon!("page"),
-        Icon::Pen => hicon!("pen"),
-        Icon::Text => hicon!("text"),
-        Icon::Comment => hicon!("comment"),
-        Icon::Search => hicon!("search"),
-        Icon::Folder => hicon!("folder"),
-        Icon::Play => hicon!("play"),
-        Icon::More => hicon!("more"),
-        Icon::Image => hicon!("image"),
-        Icon::Lock => hicon!("lock"),
-        Icon::LockOpen => hicon!("lock-open"),
-        Icon::Send => hicon!("send"),
-        Icon::Hand => include_str!("../../assets/icons/editing/hand.svg"),
+        Icon::Dashboard => glyph!("dashboard"),
+        Icon::Page => glyph!("page"),
+        Icon::Pen => glyph!("pen"),
+        Icon::Text => glyph!("text"),
+        Icon::Comment => glyph!("comment"),
+        Icon::Search => glyph!("search"),
+        Icon::Folder => glyph!("folder"),
+        Icon::Play => glyph!("play"),
+        Icon::More => glyph!("more"),
+        Icon::Image => glyph!("image"),
+        Icon::Lock => glyph!("lock"),
+        Icon::LockOpen => glyph!("lock-open"),
+        Icon::Send => glyph!("send"),
+        Icon::Hand => glyph!("hand"),
+        Icon::Frame => glyph!("frame"),
+        Icon::Rect => glyph!("rectangle"),
+        Icon::Group => glyph!("group"),
+        Icon::Sidebar => glyph!("sidebar"),
+        Icon::SidebarRight => glyph!("sidebar-right"),
         _ => return false,
     };
     static CACHE: OnceLock<Mutex<HashMap<Icon, Mesh>>> = OnceLock::new();

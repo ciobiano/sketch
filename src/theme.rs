@@ -7,7 +7,7 @@ use egui::{
 };
 use std::sync::Arc;
 
-mod hicons;
+mod glyphs;
 use std::sync::atomic::{AtomicU32, Ordering};
 
 pub static INTER_REGULAR: &[u8] = include_bytes!("../assets/fonts/Inter-Regular.ttf");
@@ -20,6 +20,10 @@ pub const MAC_BLUE: Color32 = Color32::from_rgb(0x00, 0x7a, 0xff);
 /// Body text (13pt) and secondary text (11pt), as in AppKit.
 pub const BODY: f32 = 13.0;
 pub const SECONDARY: f32 = 11.0;
+pub const DOCUMENT_TITLE: f32 = 14.0;
+pub const CONTROL_LABEL: f32 = 12.0;
+pub const TOOL_GLYPH: f32 = 19.0;
+pub const ROW_GLYPH: f32 = 15.0;
 /// Height of the unified toolbar.
 pub const TOOLBAR_H: f32 = 56.0;
 /// Traffic lights: left inset and the height of the bar they are centred in (points).
@@ -94,9 +98,9 @@ pub fn palette(dark: bool) -> Palette {
             control: Color32::from_gray(0x17),
             control_border: Color32::from_gray(0x30),
             field: Color32::from_gray(0x17),
-            text: Color32::from_gray(0xed),
-            secondary: Color32::from_gray(0xa1),
-            tertiary: Color32::from_gray(0x7c),
+            text: Color32::from_gray(0xf1),
+            secondary: Color32::from_gray(0xb0),
+            tertiary: Color32::from_gray(0x87),
             separator: Color32::from_gray(0x2e),
             hover: Color32::from_white_alpha(16),
             pressed: Color32::from_white_alpha(30),
@@ -355,7 +359,7 @@ pub enum Icon {
 }
 
 pub fn paint_icon(painter: &egui::Painter, rect: Rect, icon: Icon, color: Color32) {
-    if hicons::paint(painter, rect, icon, color) {
+    if glyphs::paint(painter, rect, icon, color) {
         return;
     }
     let s = rect.width().min(rect.height());
@@ -372,6 +376,11 @@ pub fn paint_icon(painter: &egui::Painter, rect: Rect, icon: Icon, color: Color3
         | Icon::Folder
         | Icon::Play
         | Icon::Send
+        | Icon::Frame
+        | Icon::Rect
+        | Icon::Sidebar
+        | Icon::SidebarRight
+        | Icon::Group
         | Icon::Hand
         | Icon::Text
         | Icon::Pen
@@ -391,20 +400,6 @@ pub fn paint_icon(painter: &egui::Painter, rect: Rect, icon: Icon, color: Color3
                 pt(7.3, 10.6),
                 pt(4.5, 13.0),
             ]);
-        }
-        Icon::Frame => {
-            line(&[pt(5.0, 2.0), pt(5.0, 14.0)]);
-            line(&[pt(11.0, 2.0), pt(11.0, 14.0)]);
-            line(&[pt(2.0, 5.0), pt(14.0, 5.0)]);
-            line(&[pt(2.0, 11.0), pt(14.0, 11.0)]);
-        }
-        Icon::Rect => {
-            painter.rect_stroke(
-                Rect::from_min_max(pt(2.5, 3.5), pt(13.5, 12.5)),
-                2.0 * u,
-                st,
-                egui::StrokeKind::Middle,
-            );
         }
         Icon::Ellipse => {
             painter.circle_stroke(c, 5.75 * u, st);
@@ -480,31 +475,6 @@ pub fn paint_icon(painter: &egui::Painter, rect: Rect, icon: Icon, color: Color3
         }
         Icon::Minus => {
             line(&[pt(3.0, 8.0), pt(13.0, 8.0)]);
-        }
-        Icon::Sidebar | Icon::SidebarRight => {
-            painter.rect_stroke(
-                Rect::from_min_max(pt(1.5, 3.0), pt(14.5, 13.0)),
-                2.0 * u,
-                st,
-                egui::StrokeKind::Middle,
-            );
-            let x = if icon == Icon::Sidebar { 6.0 } else { 10.0 };
-            line(&[pt(x, 3.0), pt(x, 13.0)]);
-        }
-        Icon::Group => {
-            let dash = |a: Pos2, b: Pos2| {
-                painter.add(egui::Shape::dashed_line(&[a, b], st, 1.6 * u, 1.4 * u));
-            };
-            dash(pt(2.5, 2.5), pt(13.5, 2.5));
-            dash(pt(13.5, 2.5), pt(13.5, 13.5));
-            dash(pt(13.5, 13.5), pt(2.5, 13.5));
-            dash(pt(2.5, 13.5), pt(2.5, 2.5));
-            painter.rect_stroke(
-                Rect::from_min_max(pt(5.5, 5.5), pt(10.5, 10.5)),
-                1.0 * u,
-                st,
-                egui::StrokeKind::Middle,
-            );
         }
         Icon::Polygon => {
             closed(&[pt(8.0, 2.0), pt(14.0, 13.5), pt(2.0, 13.5)]);

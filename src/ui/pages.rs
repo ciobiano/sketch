@@ -165,10 +165,10 @@ fn page_row(
         ui.painter(),
         egui::Rect::from_center_size(
             egui::pos2(row.left() + 14.0, row.center().y),
-            egui::vec2(13.0, 13.0),
+            egui::Vec2::splat(theme::ROW_GLYPH),
         ),
         Icon::Page,
-        if active { p.text } else { p.secondary },
+        p.secondary,
     );
     let name_rect = egui::Rect::from_min_max(
         egui::pos2(row.left() + 28.0, row.top()),
@@ -191,13 +191,15 @@ fn page_row(
         return None;
     } else {
         let font = if active {
-            theme::medium(theme::BODY)
+            theme::semibold(theme::BODY)
         } else {
             egui::FontId::proportional(theme::BODY)
         };
-        let g = ui
-            .painter()
-            .layout(ed.pages[i].name.clone(), font, p.text, f32::INFINITY);
+        let mut job =
+            egui::text::LayoutJob::simple_singleline(ed.pages[i].name.clone(), font, p.text);
+        job.wrap.max_width = name_rect.width().max(0.0);
+        job.wrap.max_rows = 1;
+        let g = ui.painter().layout_job(job);
         ui.painter()
             .with_clip_rect(name_rect.intersect(ui.clip_rect()))
             .galley(

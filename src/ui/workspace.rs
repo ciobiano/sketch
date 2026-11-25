@@ -237,7 +237,11 @@ fn top_bar(ui: &mut Ui, ed: &mut Editor, st: &mut UiState, narrow: bool) {
         let document = ui
             .add_sized(
                 [ui.available_width() - local_width, CONTROL_H],
-                Button::new(title(format!("{label}  ⌄"))).truncate(),
+                Button::new(
+                    RichText::new(format!("{label}  ⌄"))
+                        .font(theme::semibold(theme::DOCUMENT_TITLE)),
+                )
+                .truncate(),
             )
             .on_hover_text(label);
         egui::Popup::menu(&document).show(|ui| {
@@ -271,7 +275,14 @@ fn top_bar(ui: &mut Ui, ed: &mut Editor, st: &mut UiState, narrow: bool) {
                     .color(Color32::from_rgb(72, 177, 96))
                     .size(8.0),
             );
-            ui.add(egui::Label::new(RichText::new(state).size(11.0).color(p.secondary)).truncate());
+            ui.add(
+                egui::Label::new(
+                    RichText::new(state)
+                        .size(theme::SECONDARY)
+                        .color(p.tertiary),
+                )
+                .truncate(),
+            );
         }
     });
 
@@ -559,7 +570,11 @@ fn segments(ui: &mut Ui, key: &str, selected: &mut usize, labels: &[&str], reduc
             cell(index as f32).center(),
             Align2::CENTER_CENTER,
             label,
-            theme::medium(12.0),
+            if index == *selected {
+                theme::semibold(theme::CONTROL_LABEL)
+            } else {
+                egui::FontId::proportional(theme::CONTROL_LABEL)
+            },
             fg,
         );
     }
@@ -570,7 +585,7 @@ fn touch_active(ui: &Ui) -> bool {
 }
 
 fn title(text: impl Into<String>) -> RichText {
-    RichText::new(text).font(theme::semibold(12.0))
+    RichText::new(text).font(theme::semibold(theme::CONTROL_LABEL))
 }
 
 fn icon_control(
@@ -634,7 +649,8 @@ fn icon_control(
     } else {
         p.tertiary
     };
-    theme::paint_icon(ui.painter(), rect.shrink(7.0), icon, fg);
+    let glyph = Rect::from_center_size(rect.center(), egui::Vec2::splat(theme::TOOL_GLYPH));
+    theme::paint_icon(ui.painter(), glyph, icon, fg);
     reply.on_hover_text(label)
 }
 

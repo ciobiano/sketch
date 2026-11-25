@@ -17,12 +17,6 @@ assets from them are used.
 
 Each ported module starts with a comment naming its source.
 
-## Workspace icons
-
-Sketch bundles outline vectors from [hicon-react 1.0.0](https://www.npmjs.com/package/hicon-react/v/1.0.0)
-under the MIT license. The package lists Ajmal Leonard as its author. The vectors live in
-`assets/icons/hicon/` and use the MIT license text below.
-
 ## Dependencies
 
 Rust crates are pulled from crates.io under their own licenses (see `Cargo.lock`); notable ones
@@ -50,7 +44,6 @@ Copyright (c) 2020 Preet Shihn            (points-on-curve, points-on-path, path
 Copyright (c) 2023 Preet Shihn            (hachure-fill)
 Copyright (c) 2020 Excalidraw             (Excalidraw)
 Copyright (c) 2023 Excalidraw             (@excalidraw/laser-pointer)
-Copyright (c) Ajmal Leonard             (hicon-react)
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
