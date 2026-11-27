@@ -17,6 +17,11 @@ assets from them are used.
 
 Each ported module starts with a comment naming its source.
 
+## Icons
+
+The navigation controls use SVG paths from [Hugeicons Core Free 4.4.0](https://github.com/hugeicons/hugeicons)
+in `assets/icons/hugeicons/`. The free set uses the MIT license below.
+
 ## Dependencies
 
 Rust crates are pulled from crates.io under their own licenses (see `Cargo.lock`); notable ones
@@ -44,6 +49,7 @@ Copyright (c) 2020 Preet Shihn            (points-on-curve, points-on-path, path
 Copyright (c) 2023 Preet Shihn            (hachure-fill)
 Copyright (c) 2020 Excalidraw             (Excalidraw)
 Copyright (c) 2023 Excalidraw             (@excalidraw/laser-pointer)
+Copyright (c) 2025 Hugeicons              (Hugeicons Core Free)
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal

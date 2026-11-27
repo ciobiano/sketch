@@ -8,6 +8,8 @@ pub mod library;
 pub mod pages;
 pub mod palette;
 
+pub mod workspace;
+
 use crate::editor::shortcuts::{self, Action};
 use crate::editor::{Editor, Tool};
 use crate::model::{Color, NodeId, NodeKind};
@@ -44,6 +46,10 @@ pub struct UiState {
     pub palette: palette::PaletteUi,
     /// All panels hidden (⌘\\): just the canvas.
     pub hide_ui: bool,
+    pub preview: bool,
+    pub light_canvas: bool,
+    pub reduced_motion: bool,
+    pub workspace: workspace::WorkspaceUi,
     /// Layer being dragged in the layers panel, and where it would drop.
     pub layer_drag: Option<(NodeId, Option<LayerDrop>)>,
     /// Row rects of the last layers-panel frame (for drop targeting).
@@ -76,8 +82,8 @@ pub(crate) fn from32(c: Color32) -> Color {
 pub(crate) fn section(ui: &mut Ui, title: &str) {
     ui.label(
         RichText::new(title)
-            .font(theme::semibold(theme::SECONDARY))
-            .color(theme::pal(ui).secondary),
+            .font(theme::semibold(theme::CONTROL_LABEL))
+            .color(theme::pal(ui).text),
     );
 }
 
@@ -85,11 +91,42 @@ pub(crate) fn title_text(text: impl Into<String>) -> RichText {
     RichText::new(text).font(theme::semibold(theme::BODY))
 }
 
+/// Return whether to save the edit once the text field closes.
+pub(crate) fn finish_rename(ui: &Ui, response: &egui::Response, escape: bool) -> Option<bool> {
+    let id = response.id.with("rename-focus");
+    let frame = ui.ctx().cumulative_frame_nr();
+    let previous = ui.data_mut(|data| {
+        let previous = data.get_temp::<u64>(id);
+        data.insert_temp(id, frame);
+        previous
+    });
+    if !escape && previous.is_none_or(|last| frame.saturating_sub(last) > 1) {
+        response.request_focus();
+        return None;
+    }
+    let enter = ui.input(|i| i.key_pressed(egui::Key::Enter));
+    if escape || response.lost_focus() || (response.has_focus() && enter) {
+        ui.data_mut(|data| data.remove::<u64>(id));
+        response.surrender_focus();
+        Some(!escape)
+    } else {
+        None
+    }
+}
+
 /// Lay out the chrome and return the remaining canvas rectangle (logical px).
 pub fn draw(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) -> egui::Rect {
     if let Some(hv) = &mut st.home {
         home::draw(ui, hv, st.native_chrome, st.translucent_sidebar);
         return egui::Rect::NOTHING;
+    }
+    sync_layer_page(ed, st);
+    if st
+        .renaming
+        .as_ref()
+        .is_some_and(|(id, _)| ed.doc.get(*id).is_none())
+    {
+        st.renaming = None;
     }
     for ev in std::mem::take(&mut ed.ui_events) {
         use crate::editor::commands::UiEvent;
@@ -99,6 +136,8 @@ pub fn draw(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) -> egui::Rect {
                 if let Some(n) = ed.doc.get(id) {
                     st.renaming = Some((id, n.name.clone()));
                     st.show_library = false;
+                    st.show_comments = false;
+                    st.workspace.show_layers();
                     st.hide_ui = false;
                 }
             }
@@ -116,58 +155,19 @@ pub fn draw(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) -> egui::Rect {
             UiEvent::Comment { node, world } => st.comments.start(ed, node, world),
         }
     }
+    if st.preview {
+        let canvas = ui.available_rect_before_wrap();
+        workspace::preview_controls(ui.ctx(), canvas, ed, st);
+        return canvas;
+    }
     if st.hide_ui {
         let canvas = ui.available_rect_before_wrap();
         palette::draw(ui.ctx(), ed, st, canvas);
         return canvas;
     }
-    let p = theme::pal(ui);
-    let sidebar_fill = if st.translucent_sidebar {
-        Color32::TRANSPARENT
-    } else {
-        p.sidebar
-    };
-    egui::Panel::left("layers")
-        .resizable(true)
-        .default_size(240.0)
-        .size_range(180.0..=420.0)
-        .frame(
-            egui::Frame::NONE
-                .fill(sidebar_fill)
-                .inner_margin(egui::Margin::symmetric(10, 8)),
-        )
-        .show(ui, |ui| {
-            if st.native_chrome {
-                // Room for the traffic lights, which sit over the top of the sidebar.
-                ui.add_space(theme::TOOLBAR_H - 8.0);
-            }
-            layers(ui, ed, st)
-        });
-    egui::Panel::top("toolbar")
-        .exact_size(if st.native_chrome {
-            theme::TOOLBAR_H
-        } else {
-            34.0
-        })
-        .frame(
-            egui::Frame::NONE
-                .fill(p.window)
-                .inner_margin(egui::Margin::symmetric(12, 0)),
-        )
-        .show(ui, |ui| top_bar(ui, ed, st));
-    egui::Panel::right("design")
-        .resizable(true)
-        .default_size(260.0)
-        .size_range(220.0..=420.0)
-        .frame(
-            egui::Frame::NONE
-                .fill(p.inspector)
-                .inner_margin(egui::Margin::symmetric(14, 10)),
-        )
-        .show(ui, |ui| inspector::panel(ui, ed, st));
-    let canvas = ui.available_rect_before_wrap();
+    let canvas = workspace::panels(ui, ed, st);
     comments::canvas(ui.ctx(), ed, &mut st.comments, canvas);
-    toolbar(ui.ctx(), ed, canvas);
+    workspace::toolbar(ui.ctx(), ed, st, canvas);
     status(ui.ctx(), ed, canvas);
     palette::draw(ui.ctx(), ed, st, canvas);
     if st.show_help {
@@ -200,88 +200,6 @@ fn menu_entries(ui: &mut Ui, ed: &mut Editor, entries: &[shortcuts::MenuEntry]) 
     }
 }
 
-/// The unified toolbar: document title on the left, zoom and help on the right. Without native
-/// chrome (Linux) it also carries an egui menu bar.
-fn top_bar(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) {
-    let p = theme::pal(ui);
-    ui.horizontal_centered(|ui| {
-        if !st.native_chrome {
-            menu_bar(ui, ed);
-            ui.add_space(8.0);
-        }
-        if theme::icon_button(ui, theme::Icon::Grid, 26.0, false)
-            .on_hover_text("All projects")
-            .clicked()
-        {
-            ed.requests.push(crate::editor::AppRequest::Home);
-        }
-        ui.add_space(4.0);
-        let title = if st.project_name.is_empty() {
-            ed.doc.name.clone()
-        } else {
-            st.project_name.clone()
-        };
-        ui.vertical(|ui| {
-            ui.spacing_mut().item_spacing.y = 0.0;
-            ui.add_space(if st.native_chrome { 6.0 } else { 1.0 });
-            ui.label(title_text(title));
-            let state = if !st.save_state.is_empty() {
-                st.save_state.clone()
-            } else if ed.is_dirty() {
-                "Edited".into()
-            } else {
-                String::new()
-            };
-            let sub = if state.is_empty() {
-                ed.page_name().to_string()
-            } else {
-                format!("{} — {state}", ed.page_name())
-            };
-            ui.label(RichText::new(sub).size(theme::SECONDARY).color(p.secondary));
-        });
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            ui.spacing_mut().item_spacing.x = 2.0;
-            if theme::icon_button(ui, theme::Icon::Question, 26.0, st.show_help)
-                .on_hover_text("Keyboard shortcuts")
-                .clicked()
-            {
-                st.show_help = !st.show_help;
-            }
-            ui.add_space(8.0);
-            if theme::icon_button(ui, theme::Icon::Plus, 26.0, false)
-                .on_hover_text("Zoom in")
-                .clicked()
-            {
-                ed.run(Action::ZoomIn);
-            }
-            let z = ui.add(
-                egui::Button::new(
-                    RichText::new(format!("{:.0}%", ed.camera.zoom * 100.0))
-                        .font(theme::medium(theme::SECONDARY + 1.0)),
-                )
-                .frame(false)
-                .min_size(egui::vec2(44.0, 22.0)),
-            );
-            if z.on_hover_text("Zoom to fit").clicked() {
-                ed.run(Action::ZoomFit);
-            }
-            if theme::icon_button(ui, theme::Icon::Minus, 26.0, false)
-                .on_hover_text("Zoom out")
-                .clicked()
-            {
-                ed.run(Action::ZoomOut);
-            }
-        });
-    });
-    // 1px separator under the toolbar.
-    let r = ui.max_rect();
-    ui.painter().hline(
-        r.x_range(),
-        r.bottom() - 0.5,
-        egui::Stroke::new(1.0, p.separator),
-    );
-}
-
 /// egui menus for platforms without a native menu bar (inline, so the toolbar row keeps
 /// the title and zoom controls).
 fn menu_bar(ui: &mut Ui, ed: &mut Editor) {
@@ -292,8 +210,19 @@ fn menu_bar(ui: &mut Ui, ed: &mut Editor) {
     }
 }
 
-fn layers(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) {
-    pages::panel(ui, ed, st);
+fn sync_layer_page(ed: &Editor, st: &mut UiState) {
+    let page = ed.active_page_id();
+    if st.workspace.page_id != page {
+        st.workspace.page_id = page.to_owned();
+        st.renaming = None;
+        st.layer_drag = None;
+    }
+}
+
+fn layers(ui: &mut Ui, ed: &mut Editor, st: &mut UiState, compact: bool) {
+    let query = st.workspace.search.trim().to_lowercase();
+    pages::panel(ui, ed, st, compact, &query);
+    sync_layer_page(ed, st);
     ui.add_space(4.0);
     let r = ui.available_rect_before_wrap();
     ui.painter().hline(
@@ -304,6 +233,7 @@ fn layers(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) {
     ui.add_space(6.0);
     let p = theme::pal(ui);
     ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = if compact { 4.0 } else { 8.0 };
         // 0 layers, 1 library, 2 comments.
         let tab = if st.show_comments {
             2
@@ -315,7 +245,11 @@ fn layers(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) {
             let r = ui.add(
                 egui::Label::new(
                     RichText::new(label)
-                        .font(theme::semibold(theme::SECONDARY))
+                        .font(if on {
+                            theme::semibold(theme::CONTROL_LABEL)
+                        } else {
+                            egui::FontId::proportional(theme::CONTROL_LABEL)
+                        })
                         .color(if on { p.text } else { p.secondary }),
                 )
                 .sense(egui::Sense::click()),
@@ -332,13 +266,13 @@ fn layers(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) {
             ui.spacing_mut().item_spacing.x = 0.0;
             let some = !ed.selection.is_empty();
             ui.add_enabled_ui(some, |ui| {
-                if theme::icon_button(ui, Icon::ChevronDown, 20.0, false)
+                if theme::icon_button(ui, Icon::ChevronDown, 16.0, false)
                     .on_hover_text("Send backward")
                     .clicked()
                 {
                     ed.run(Action::Backward);
                 }
-                if theme::icon_button(ui, Icon::ChevronUp, 20.0, false)
+                if theme::icon_button(ui, Icon::ChevronUp, 16.0, false)
                     .on_hover_text("Bring forward")
                     .clicked()
                 {
@@ -356,12 +290,30 @@ fn layers(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) {
         comments::panel(ui, ed, &mut st.comments);
         return;
     }
+    let filter = (!query.is_empty()).then(|| {
+        let mut visible = HashSet::new();
+        for node in ed
+            .doc
+            .nodes
+            .values()
+            .filter(|n| n.name.to_lowercase().contains(&query))
+        {
+            let mut id = Some(node.id);
+            while let Some(current) = id.filter(|id| visible.insert(*id)) {
+                id = ed.doc.get(current).and_then(|n| n.parent);
+            }
+        }
+        visible
+    });
     egui::ScrollArea::vertical()
+        .id_salt("layers-scroll")
         .auto_shrink(false)
         .show(ui, |ui| {
             ui.spacing_mut().item_spacing.y = 1.0;
             let roots = ed.doc.root.clone();
-            if roots.is_empty() {
+            if filter.as_ref().is_some_and(HashSet::is_empty) {
+                ui.label(RichText::new("No matching layers").small().weak());
+            } else if roots.is_empty() {
                 ui.label(
                     RichText::new("Nothing here yet. Pick a tool below\nand draw on the canvas.")
                         .size(theme::SECONDARY)
@@ -370,9 +322,11 @@ fn layers(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) {
             }
             st.layer_rows.clear();
             for id in roots.iter().rev() {
-                layer_row(ui, ed, st, *id, 0);
+                layer_row(ui, ed, st, *id, 0, filter.as_ref());
             }
-            layer_drag(ui, ed, st);
+            if filter.is_none() {
+                layer_drag(ui, ed, st);
+            }
         });
 }
 
@@ -472,33 +426,77 @@ pub fn drop_layer(ed: &mut Editor, id: NodeId, d: LayerDrop) {
     ed.selection = vec![id];
 }
 
-fn node_icon(n: &crate::model::Node) -> Icon {
+fn node_icon(ed: &Editor, n: &crate::model::Node) -> Icon {
+    use crate::model::{Direction, Head, Paint};
+
     if n.component {
         return Icon::Component;
     }
-    if n.instance.is_some() && n.parent.is_none_or(|_| n.is_frame()) && n.is_frame() {
+    if ed.is_instance_root(n.id) {
         return Icon::Instance;
     }
-    if n.style
-        .fills
-        .iter()
-        .any(|p| matches!(p, crate::model::Paint::Image { .. }))
-        && matches!(n.kind, NodeKind::Rect)
-    {
-        return Icon::Image;
-    }
-    kind_icon(&n.kind)
-}
+    let image = || {
+        n.style
+            .fills
+            .iter()
+            .any(|paint| matches!(paint, Paint::Image { .. }))
+    };
 
-fn kind_icon(k: &NodeKind) -> Icon {
-    match k {
+    match &n.kind {
+        NodeKind::Frame { .. } if n.children.is_empty() && image() => Icon::Image,
+        NodeKind::Frame { clip: false }
+            if n.children.is_empty()
+                && n.layout.is_some()
+                && (!n.style.fills.is_empty() || n.style.stroke.is_some()) =>
+        {
+            // HTML imports represent decorative boxes as frames. Identify their visible
+            // shape without changing the editable node or its layout settings.
+            let (w, h) = (n.rect.w, n.rect.h);
+            if h <= 2.0 && w >= 4.0 * h {
+                Icon::Divider
+            } else if w <= 2.0 && h >= 4.0 * w {
+                Icon::Line
+            } else if w.min(h) > 0.0
+                && (w - h).abs() <= w.min(h) * 0.1
+                && n.style
+                    .corner_radii()
+                    .iter()
+                    .all(|radius| *radius >= w.min(h) * 0.48)
+            {
+                Icon::Ellipse
+            } else {
+                Icon::Rect
+            }
+        }
+        NodeKind::Frame { clip } if !n.children.is_empty() && (!clip || n.parent.is_some()) => {
+            match &n.layout {
+                Some(layout) if layout.direction == Direction::Horizontal => Icon::LayoutRow,
+                Some(_) => Icon::LayoutColumn,
+                None if !clip => Icon::Stack,
+                None => Icon::Frame,
+            }
+        }
+        NodeKind::Frame { .. } => Icon::Frame,
         NodeKind::Group => Icon::Group,
+        NodeKind::Connector {
+            start,
+            end,
+            start_head,
+            end_head,
+            ..
+        } if start.is_some()
+            || end.is_some()
+            || (*start_head == Head::None && *end_head == Head::None) =>
+        {
+            Icon::Connector
+        }
         NodeKind::Connector { .. } => Icon::Arrow,
         NodeKind::Sticky { .. } => Icon::Sticky,
-        NodeKind::Path { .. } => Icon::Pen,
+        NodeKind::Path { .. } => Icon::VectorPath,
+        NodeKind::Polygon { sides: 4 } => Icon::Diamond,
         NodeKind::Polygon { .. } => Icon::Polygon,
         NodeKind::Star { .. } => Icon::Star,
-        NodeKind::Frame { .. } => Icon::Frame,
+        NodeKind::Rect if image() => Icon::Image,
         NodeKind::Rect => Icon::Rect,
         NodeKind::Ellipse => Icon::Ellipse,
         NodeKind::Line { .. } => Icon::Line,
@@ -509,7 +507,17 @@ fn kind_icon(k: &NodeKind) -> Icon {
 
 /// One sidebar row, drawn like an NSOutlineView row: 24pt tall, 6pt radius selection in the
 /// accent colour, subtle hover, disclosure chevron, symbol, name, and eye/lock on hover.
-fn layer_row(ui: &mut Ui, ed: &mut Editor, st: &mut UiState, id: NodeId, depth: usize) {
+fn layer_row(
+    ui: &mut Ui,
+    ed: &mut Editor,
+    st: &mut UiState,
+    id: NodeId,
+    depth: usize,
+    filter: Option<&HashSet<NodeId>>,
+) {
+    if filter.is_some_and(|ids| !ids.contains(&id)) {
+        return;
+    }
     let Some(n) = ed.doc.get(id).cloned() else {
         return;
     };
@@ -519,14 +527,16 @@ fn layer_row(ui: &mut Ui, ed: &mut Editor, st: &mut UiState, id: NodeId, depth: 
     let (row, resp) =
         ui.allocate_exact_size(egui::vec2(width, 24.0), egui::Sense::click_and_drag());
     st.layer_rows.push((id, row, depth));
-    if resp.drag_started() && !n.locked {
+    if resp.drag_started() && !n.locked && filter.is_none() {
         st.layer_drag = Some((id, None));
     }
     let hovered = ui.rect_contains_pointer(row);
     if selected {
-        ui.painter().rect_filled(row, 6.0, theme::accent());
+        ui.painter()
+            .rect_filled(row, theme::CONTROL_RADIUS, p.selected);
     } else if hovered {
-        ui.painter().rect_filled(row, 6.0, p.hover);
+        ui.painter()
+            .rect_filled(row, theme::CONTROL_RADIUS, p.hover);
     }
     let fg = if selected {
         Color32::WHITE
@@ -540,14 +550,14 @@ fn layer_row(ui: &mut Ui, ed: &mut Editor, st: &mut UiState, id: NodeId, depth: 
     } else {
         p.secondary
     };
-    let mut x = row.left() + 4.0 + depth as f32 * 14.0;
+    let mut x = (row.left() + 4.0 + depth as f32 * 14.0).min(row.right() - 76.0);
     let cy = row.center().y;
     let sq = |x: f32, s: f32| {
         egui::Rect::from_center_size(egui::pos2(x + s / 2.0, cy), egui::vec2(s, s))
     };
 
     // Disclosure chevron.
-    if !n.children.is_empty() {
+    if !n.children.is_empty() && filter.is_none() {
         let open = !st.collapsed.contains(&id);
         let r = sq(x, 14.0);
         let cr = ui.interact(
@@ -576,13 +586,9 @@ fn layer_row(ui: &mut Ui, ed: &mut Editor, st: &mut UiState, id: NodeId, depth: 
     x += 16.0;
     theme::paint_icon(
         ui.painter(),
-        sq(x, 14.0),
-        node_icon(&n),
-        if selected {
-            Color32::WHITE
-        } else {
-            theme::accent()
-        },
+        sq(x, theme::ROW_GLYPH),
+        node_icon(ed, &n),
+        fg2,
     );
     x += 20.0;
 
@@ -590,10 +596,10 @@ fn layer_row(ui: &mut Ui, ed: &mut Editor, st: &mut UiState, id: NodeId, depth: 
     let mut right = row.right() - 4.0;
     let mut trailing = |ui: &mut Ui, icon: Icon, tip: &str, show: bool| -> bool {
         let r = egui::Rect::from_center_size(egui::pos2(right - 9.0, cy), egui::vec2(18.0, 18.0));
-        right -= 20.0;
         if !show {
             return false;
         }
+        right -= 20.0;
         let b = ui.interact(r, ui.id().with((tip, id)), egui::Sense::click());
         if b.hovered() {
             ui.painter().rect_filled(
@@ -635,37 +641,69 @@ fn layer_row(ui: &mut Ui, ed: &mut Editor, st: &mut UiState, id: NodeId, depth: 
     // Name, or an inline rename field.
     let name_rect =
         egui::Rect::from_min_max(egui::pos2(x, row.top()), egui::pos2(right, row.bottom()));
+    let editing = st
+        .renaming
+        .as_ref()
+        .is_some_and(|(target, _)| *target == id);
     if let Some((rid, name)) = &mut st.renaming
         && *rid == id
     {
-        let r = ui.put(
+        let escape = ui.input(|i| i.key_pressed(egui::Key::Escape));
+        let response = ui.put(
             name_rect.shrink2(egui::vec2(0.0, 2.0)),
-            egui::TextEdit::singleline(name),
+            egui::TextEdit::singleline(name).id(ui.id().with(("rename-layer", id))),
         );
-        r.request_focus();
-        if r.lost_focus() {
-            let new = name.trim().to_string();
-            st.renaming = None;
-            if !new.is_empty() && new != n.name {
-                ed.edit("Rename", |tx| tx.node_mut(id).unwrap().name = new);
+        if let Some(confirmed) = finish_rename(ui, &response, escape) {
+            let (_, name) = st.renaming.take().unwrap();
+            let name = name.trim();
+            if confirmed && !name.is_empty() && name != n.name {
+                ed.edit("Rename", |tx| {
+                    if let Some(node) = tx.node_mut(id) {
+                        node.name = name.to_owned();
+                    }
+                });
             }
         }
     } else {
-        let font = if n.is_frame() {
-            theme::medium(theme::BODY)
+        let font = if selected || (depth == 0 && n.is_container()) {
+            theme::semibold(theme::BODY)
         } else {
             egui::FontId::proportional(theme::BODY)
         };
-        let galley = ui.painter().layout(n.name.clone(), font, fg, f32::INFINITY);
+        let mut job = egui::text::LayoutJob::simple_singleline(n.name.clone(), font, fg);
+        job.wrap.max_width = name_rect.width().max(0.0);
+        job.wrap.max_rows = 1;
+        let galley = ui.painter().layout_job(job);
         let clip = ui
             .painter()
             .with_clip_rect(name_rect.intersect(ui.clip_rect()));
         clip.galley(egui::pos2(x, cy - galley.size().y / 2.0), galley, fg);
     }
 
-    if resp.double_clicked() {
+    if !editing {
+        resp.context_menu(|ui| {
+            if ui.button("Rename").clicked() {
+                st.renaming = Some((id, n.name.clone()));
+                ui.close();
+            }
+            if ui
+                .add_enabled(
+                    !ed.doc.is_effectively_locked(id),
+                    egui::Button::new("Delete"),
+                )
+                .clicked()
+            {
+                if !selected {
+                    ed.select(vec![id]);
+                }
+                ed.run(Action::Delete);
+                ui.close();
+            }
+        });
+    }
+    if !editing && resp.double_clicked() {
         st.renaming = Some((id, n.name.clone()));
-    } else if resp.clicked() {
+    } else if !editing && resp.clicked() {
         ed.end_text_edit();
         if ui.input(|i| i.modifiers.shift || i.modifiers.command) {
             if selected {
@@ -680,9 +718,9 @@ fn layer_row(ui: &mut Ui, ed: &mut Editor, st: &mut UiState, id: NodeId, depth: 
     if hovered {
         ed.hover = Some(id);
     }
-    if !st.collapsed.contains(&id) {
+    if filter.is_some() || !st.collapsed.contains(&id) {
         for c in n.children.iter().rev() {
-            layer_row(ui, ed, st, *c, depth + 1);
+            layer_row(ui, ed, st, *c, depth + 1, filter);
         }
     }
 }
@@ -707,51 +745,6 @@ fn tool_icon(t: Tool) -> Icon {
         Tool::Eraser => Icon::Eraser,
         Tool::Comment => Icon::Comment,
     }
-}
-
-/// Floating tool palette at the bottom of the canvas, styled as a macOS popover.
-fn toolbar(ctx: &egui::Context, ed: &mut Editor, canvas: egui::Rect) {
-    egui::Area::new("toolbar".into())
-        .pivot(Align2::CENTER_BOTTOM)
-        .fixed_pos(egui::pos2(canvas.center().x, canvas.bottom() - 16.0))
-        .show(ctx, |ui| {
-            let p = theme::pal(ui);
-            egui::Frame::popup(ui.style())
-                .fill(p.popover)
-                .corner_radius(10.0)
-                .inner_margin(5.0)
-                .show(ui, |ui| {
-                    ui.horizontal(|ui| {
-                        ui.spacing_mut().item_spacing.x = 2.0;
-                        for t in Tool::ALL {
-                            if matches!(
-                                t,
-                                Tool::Frame
-                                    | Tool::Line
-                                    | Tool::Text
-                                    | Tool::Pencil
-                                    | Tool::Comment
-                            ) {
-                                let (r, _) = ui.allocate_exact_size(
-                                    egui::vec2(9.0, 28.0),
-                                    egui::Sense::hover(),
-                                );
-                                ui.painter().vline(
-                                    r.center().x,
-                                    r.y_range().shrink(6.0),
-                                    egui::Stroke::new(1.0, p.separator),
-                                );
-                            }
-                            if theme::icon_button(ui, tool_icon(t), 30.0, ed.tool == t)
-                                .on_hover_text(format!("{} ({})", t.label(), t.shortcut()))
-                                .clicked()
-                            {
-                                ed.run(Action::Tool(t));
-                            }
-                        }
-                    });
-                });
-        });
 }
 
 fn status(ctx: &egui::Context, ed: &Editor, canvas: egui::Rect) {
@@ -828,5 +821,47 @@ fn help(ctx: &egui::Context, st: &mut UiState, canvas: egui::Rect) {
         });
     if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
         st.show_help = false;
+    }
+}
+
+#[cfg(test)]
+mod layer_icon_tests {
+    use super::*;
+    use crate::geom::Rect;
+    use crate::model::{AutoLayout, Direction, Node, Paint};
+
+    #[test]
+    fn uses_visible_shapes_for_imported_leaves_and_layout_for_containers() {
+        let ed = Editor::default();
+        let mut layer = Node::new(
+            NodeId(1),
+            NodeKind::Frame { clip: false },
+            Rect::new(0.0, 0.0, 24.0, 24.0),
+        );
+        layer.name = "Frame".into();
+        layer.layout = Some(AutoLayout::default());
+        layer.style.fills = vec![Paint::solid(Color::WHITE)];
+        assert_eq!(node_icon(&ed, &layer), Icon::Rect);
+
+        layer.style.corner_radius = 12.0;
+        assert_eq!(node_icon(&ed, &layer), Icon::Ellipse);
+        layer.rect.h = 1.0;
+        assert_eq!(node_icon(&ed, &layer), Icon::Divider);
+
+        layer.children.push(NodeId(2));
+        assert_eq!(node_icon(&ed, &layer), Icon::LayoutRow);
+        layer.layout.as_mut().unwrap().direction = Direction::Vertical;
+        assert_eq!(node_icon(&ed, &layer), Icon::LayoutColumn);
+        layer.kind = NodeKind::Frame { clip: true };
+        assert_eq!(node_icon(&ed, &layer), Icon::Frame);
+
+        layer.children.clear();
+        layer.kind = NodeKind::Polygon { sides: 4 };
+        assert_eq!(node_icon(&ed, &layer), Icon::Diamond);
+        layer.kind = NodeKind::Path {
+            subpaths: Vec::new(),
+            fill_rule: Default::default(),
+        };
+        assert_eq!(node_icon(&ed, &layer), Icon::VectorPath);
     }
 }

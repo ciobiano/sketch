@@ -1,71 +1,43 @@
-//! macOS-flavoured look for the egui chrome: Inter font, system accent, light/dark palettes
-//! that follow the system appearance, and thin SF Symbols-style line icons.
+//! Native chrome styled with the Rhea preset, Inter and Sketch’s editing glyphs.
 
 use egui::{
     Color32, CornerRadius, FontData, FontFamily, FontId, Pos2, Rect, Shadow, Stroke, Vec2, pos2,
     vec2,
 };
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU32, Ordering};
+
+mod glyphs;
 
 pub static INTER_REGULAR: &[u8] = include_bytes!("../assets/fonts/Inter-Regular.ttf");
 pub static INTER_MEDIUM: &[u8] = include_bytes!("../assets/fonts/Inter-Medium.ttf");
 pub static INTER_SEMIBOLD: &[u8] = include_bytes!("../assets/fonts/Inter-SemiBold.ttf");
 
-/// macOS system blue, used when the system accent can't be read.
-pub const MAC_BLUE: Color32 = Color32::from_rgb(0x00, 0x7a, 0xff);
+/// Blue for selection outlines, drag indicators, and links.
+pub const ACCENT: Color32 = Color32::from_rgb(0x2b, 0x7f, 0xff);
+
+/// Rhea uses a 0.45rem base radius, about 7 points at the default size.
+pub const CONTROL_RADIUS: u8 = 7;
+pub const PANEL_RADIUS: u8 = 10;
 
 /// Body text (13pt) and secondary text (11pt), as in AppKit.
 pub const BODY: f32 = 13.0;
 pub const SECONDARY: f32 = 11.0;
+pub const DOCUMENT_TITLE: f32 = 14.0;
+pub const CONTROL_LABEL: f32 = 12.0;
+pub const TOOL_GLYPH: f32 = 19.0;
+pub const ROW_GLYPH: f32 = 15.0;
 /// Height of the unified toolbar.
-pub const TOOLBAR_H: f32 = 40.0;
+pub const TOOLBAR_H: f32 = 56.0;
 /// Traffic lights: left inset and the height of the bar they are centred in (points).
 pub const TRAFFIC_LIGHTS: (f64, f64) = (14.0, TOOLBAR_H as f64);
 /// Horizontal room the traffic lights need from the window's left edge.
 pub const TRAFFIC_LIGHTS_W: f32 = 76.0;
 
-static ACCENT: AtomicU32 = AtomicU32::new(u32::from_be_bytes([0x00, 0x7a, 0xff, 0xff]));
-
-pub fn accent() -> Color32 {
-    let [r, g, b, _] = ACCENT.load(Ordering::Relaxed).to_be_bytes();
-    Color32::from_rgb(r, g, b)
+pub const fn accent() -> Color32 {
+    ACCENT
 }
 
-pub fn set_accent(c: Color32) {
-    ACCENT.store(
-        u32::from_be_bytes([c.r(), c.g(), c.b(), 0xff]),
-        Ordering::Relaxed,
-    );
-}
-
-/// The user's accent colour from System Settings › Appearance (falls back to system blue).
-pub fn system_accent() -> Color32 {
-    #[cfg(target_os = "macos")]
-    {
-        // `AppleAccentColor` is absent for the default (blue) and multicolour settings.
-        let out = std::process::Command::new("/usr/bin/defaults")
-            .args(["read", "-g", "AppleAccentColor"])
-            .output();
-        if let Ok(o) = out
-            && o.status.success()
-        {
-            return match String::from_utf8_lossy(&o.stdout).trim() {
-                "-1" => Color32::from_rgb(0x8c, 0x8c, 0x8c),
-                "0" => Color32::from_rgb(0xff, 0x3b, 0x30),
-                "1" => Color32::from_rgb(0xff, 0x95, 0x00),
-                "2" => Color32::from_rgb(0xff, 0xcc, 0x00),
-                "3" => Color32::from_rgb(0x28, 0xcd, 0x41),
-                "5" => Color32::from_rgb(0xaf, 0x52, 0xde),
-                "6" => Color32::from_rgb(0xff, 0x2d, 0x55),
-                _ => MAC_BLUE,
-            };
-        }
-    }
-    MAC_BLUE
-}
-
-/// Colours for one appearance, loosely after AppKit's semantic colours.
+/// Semantic colors from shadcn preset b27I38BE, converted from OKLCH to sRGB.
 #[derive(Clone, Copy)]
 pub struct Palette {
     pub window: Color32,
@@ -75,6 +47,10 @@ pub struct Palette {
     pub control_border: Color32,
     pub field: Color32,
     pub text: Color32,
+    pub primary: Color32,
+    pub primary_text: Color32,
+    pub selected: Color32,
+    pub focus: Color32,
     pub secondary: Color32,
     pub tertiary: Color32,
     pub separator: Color32,
@@ -84,37 +60,49 @@ pub struct Palette {
 }
 
 pub fn palette(dark: bool) -> Palette {
+    let primary_text = Color32::from_rgb(0xef, 0xf6, 0xff);
     if dark {
+        // The 10% white border composited over the sidebar surface.
+        let border = Color32::from_gray(0x2e);
         Palette {
-            window: Color32::from_rgb(0x2b, 0x2b, 0x2d),
-            sidebar: Color32::from_rgb(0x26, 0x26, 0x28),
-            inspector: Color32::from_rgb(0x25, 0x25, 0x27),
-            control: Color32::from_rgb(0x3a, 0x3a, 0x3c),
-            control_border: Color32::from_white_alpha(22),
-            field: Color32::from_rgb(0x1f, 0x1f, 0x21),
-            text: Color32::from_rgb(0xec, 0xec, 0xee),
-            secondary: Color32::from_rgb(0x98, 0x98, 0x9d),
-            tertiary: Color32::from_rgb(0x63, 0x63, 0x66),
-            separator: Color32::from_rgb(0x3a, 0x3a, 0x3c),
-            hover: Color32::from_white_alpha(16),
+            window: Color32::from_gray(0x0a),
+            sidebar: Color32::from_gray(0x17),
+            inspector: Color32::from_gray(0x17),
+            control: Color32::from_rgb(0x27, 0x27, 0x2a),
+            control_border: Color32::from_white_alpha(38),
+            field: Color32::from_gray(0x17),
+            text: Color32::from_gray(0xfa),
+            primary: Color32::from_rgb(0x19, 0x3c, 0xb8),
+            primary_text,
+            selected: Color32::from_gray(0x26),
+            focus: Color32::from_gray(0x73),
+            secondary: Color32::from_gray(0xa1),
+            tertiary: Color32::from_gray(0x89),
+            separator: border,
+            hover: Color32::from_white_alpha(14),
             pressed: Color32::from_white_alpha(30),
-            popover: Color32::from_rgb(0x32, 0x32, 0x34),
+            popover: Color32::from_gray(0x17),
         }
     } else {
+        let border = Color32::from_gray(0xe5);
         Palette {
-            window: Color32::from_rgb(0xf6, 0xf6, 0xf6),
-            sidebar: Color32::from_rgb(0xee, 0xee, 0xf0),
-            inspector: Color32::from_rgb(0xf6, 0xf6, 0xf6),
-            control: Color32::WHITE,
-            control_border: Color32::from_black_alpha(30),
+            window: Color32::WHITE,
+            sidebar: Color32::from_gray(0xfa),
+            inspector: Color32::WHITE,
+            control: Color32::from_rgb(0xf4, 0xf4, 0xf5),
+            control_border: border,
             field: Color32::WHITE,
-            text: Color32::from_rgb(0x1d, 0x1d, 0x1f),
-            secondary: Color32::from_rgb(0x86, 0x86, 0x8b),
-            tertiary: Color32::from_rgb(0xb8, 0xb8, 0xbc),
-            separator: Color32::from_rgb(0xdc, 0xdc, 0xde),
-            hover: Color32::from_black_alpha(12),
-            pressed: Color32::from_black_alpha(24),
-            popover: Color32::from_rgb(0xfc, 0xfc, 0xfc),
+            text: Color32::from_gray(0x0a),
+            primary: Color32::from_rgb(0x14, 0x47, 0xe6),
+            primary_text,
+            selected: Color32::from_gray(0xf5),
+            focus: Color32::from_gray(0xa1),
+            secondary: Color32::from_gray(0x73),
+            tertiary: Color32::from_gray(0x73),
+            separator: border,
+            hover: Color32::from_black_alpha(10),
+            pressed: Color32::from_black_alpha(22),
+            popover: Color32::WHITE,
         }
     }
 }
@@ -126,14 +114,26 @@ pub fn pal(ui: &egui::Ui) -> Palette {
 /// Inter (Regular/Medium/SemiBold) as the proportional family, egui's fonts as fallbacks.
 pub fn install_fonts(ctx: &egui::Context) {
     let mut fonts = egui::FontDefinitions::default();
+    let hinting_target =
+        egui::epaint::text::HintingTarget::Smooth(egui::epaint::text::SmoothHinting {
+            light: true,
+            symmetric_rendering: false,
+            ..Default::default()
+        });
     for (name, bytes) in [
         ("Inter", INTER_REGULAR),
         ("Inter-Medium", INTER_MEDIUM),
         ("Inter-SemiBold", INTER_SEMIBOLD),
     ] {
-        fonts
-            .font_data
-            .insert(name.into(), Arc::new(FontData::from_static(bytes)));
+        fonts.font_data.insert(
+            name.into(),
+            Arc::new(
+                FontData::from_static(bytes).tweak(egui::epaint::text::FontTweak {
+                    hinting_target,
+                    ..Default::default()
+                }),
+            ),
+        );
     }
     let fallbacks: Vec<String> = fonts
         .families
@@ -170,7 +170,7 @@ pub fn semibold(size: f32) -> FontId {
 fn style_for(s: &mut egui::Style, dark: bool) {
     use egui::TextStyle as T;
     let p = palette(dark);
-    let acc = accent();
+    let acc = if dark { ACCENT } else { p.primary };
     s.visuals = if dark {
         egui::Visuals::dark()
     } else {
@@ -184,6 +184,9 @@ fn style_for(s: &mut egui::Style, dark: bool) {
         (T::Monospace, FontId::monospace(12.0)),
     ]
     .into();
+    if dark {
+        s.animation_time = 0.22;
+    }
     s.spacing.item_spacing = vec2(6.0, 4.0);
     s.spacing.button_padding = vec2(8.0, 3.0);
     s.spacing.interact_size = vec2(24.0, 22.0);
@@ -210,8 +213,8 @@ fn style_for(s: &mut egui::Style, dark: bool) {
     v.extreme_bg_color = p.field;
     v.text_edit_bg_color = Some(p.field);
     v.window_stroke = Stroke::new(1.0, p.control_border);
-    v.window_corner_radius = CornerRadius::same(10);
-    v.menu_corner_radius = CornerRadius::same(10);
+    v.window_corner_radius = CornerRadius::same(PANEL_RADIUS);
+    v.menu_corner_radius = CornerRadius::same(PANEL_RADIUS);
     v.window_shadow = Shadow {
         offset: [0, 8],
         blur: 28,
@@ -224,8 +227,8 @@ fn style_for(s: &mut egui::Style, dark: bool) {
         spread: 0,
         color: Color32::from_black_alpha(if dark { 90 } else { 30 }),
     };
-    v.selection.bg_fill = acc;
-    v.selection.stroke = Stroke::new(1.0, Color32::WHITE);
+    v.selection.bg_fill = p.primary;
+    v.selection.stroke = Stroke::new(1.0, p.primary_text);
     v.slider_trailing_fill = true;
     v.handle_shape = egui::style::HandleShape::Circle;
     v.indent_has_left_vline = false;
@@ -233,30 +236,30 @@ fn style_for(s: &mut egui::Style, dark: bool) {
     v.interact_cursor = None;
     v.collapsing_header_frame = false;
 
-    let r6 = CornerRadius::same(6);
+    let control_radius = CornerRadius::same(CONTROL_RADIUS);
     let w = &mut v.widgets;
     w.noninteractive.bg_fill = p.inspector;
     w.noninteractive.weak_bg_fill = p.inspector;
     w.noninteractive.bg_stroke = Stroke::new(1.0, p.separator);
     w.noninteractive.fg_stroke = Stroke::new(1.0, p.text);
-    w.noninteractive.corner_radius = r6;
+    w.noninteractive.corner_radius = control_radius;
     w.inactive.bg_fill = p.control;
     w.inactive.weak_bg_fill = p.control;
     w.inactive.bg_stroke = Stroke::new(1.0, p.control_border);
     w.inactive.fg_stroke = Stroke::new(1.0, p.text);
-    w.inactive.corner_radius = r6;
+    w.inactive.corner_radius = control_radius;
     w.inactive.expansion = 0.0;
     w.hovered.bg_fill = p.control;
     w.hovered.weak_bg_fill = blend(p.control, p.hover);
     w.hovered.bg_stroke = Stroke::new(1.0, p.control_border);
     w.hovered.fg_stroke = Stroke::new(1.0, p.text);
-    w.hovered.corner_radius = r6;
+    w.hovered.corner_radius = control_radius;
     w.hovered.expansion = 0.0;
     w.active.bg_fill = blend(p.control, p.pressed);
     w.active.weak_bg_fill = blend(p.control, p.pressed);
-    w.active.bg_stroke = Stroke::new(1.0, p.control_border);
+    w.active.bg_stroke = Stroke::new(1.0, p.focus);
     w.active.fg_stroke = Stroke::new(1.0, p.text);
-    w.active.corner_radius = r6;
+    w.active.corner_radius = control_radius;
     w.active.expansion = 0.0;
     w.open = w.active;
 }
@@ -282,8 +285,19 @@ pub fn apply(ctx: &egui::Context) {
 }
 
 /// Thin line icons in the spirit of SF Symbols, drawn into a square `rect`.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Icon {
+    Dashboard,
+    Search,
+    Folder,
+    Play,
+    Send,
+    VectorPath,
+    LayoutRow,
+    LayoutColumn,
+    Stack,
+    Divider,
+    Connector,
     Pointer,
     Hand,
     Frame,
@@ -305,6 +319,7 @@ pub enum Icon {
     Plus,
     Minus,
     Sidebar,
+    SidebarRight,
     Export,
     Grid,
     Trash,
@@ -344,6 +359,9 @@ pub enum Icon {
 }
 
 pub fn paint_icon(painter: &egui::Painter, rect: Rect, icon: Icon, color: Color32) {
+    if glyphs::paint(painter, rect, icon, color) {
+        return;
+    }
     let s = rect.width().min(rect.height());
     let c = rect.center();
     let u = s / 16.0; // design grid: 16x16
@@ -353,6 +371,39 @@ pub fn paint_icon(painter: &egui::Painter, rect: Rect, icon: Icon, color: Color3
     let line = |pts: &[Pos2]| painter.add(egui::Shape::line(pts.to_vec(), st));
     let closed = |pts: &[Pos2]| painter.add(egui::Shape::closed_line(pts.to_vec(), st));
     match icon {
+        Icon::Dashboard
+        | Icon::Search
+        | Icon::Folder
+        | Icon::Play
+        | Icon::Send
+        | Icon::Frame
+        | Icon::Rect
+        | Icon::Sidebar
+        | Icon::SidebarRight
+        | Icon::Group
+        | Icon::Hand
+        | Icon::Text
+        | Icon::Pen
+        | Icon::Comment
+        | Icon::More
+        | Icon::Page
+        | Icon::Image
+        | Icon::Lock
+        | Icon::Ellipse
+        | Icon::Line
+        | Icon::VectorPath
+        | Icon::LayoutRow
+        | Icon::LayoutColumn
+        | Icon::Stack
+        | Icon::Divider
+        | Icon::Diamond
+        | Icon::Polygon
+        | Icon::Star
+        | Icon::Arrow
+        | Icon::Connector
+        | Icon::Sticky
+        | Icon::Ink
+        | Icon::LockOpen => unreachable!("handled by the SVG icon set"),
         Icon::Pointer => {
             closed(&[
                 pt(4.5, 2.5),
@@ -363,43 +414,6 @@ pub fn paint_icon(painter: &egui::Painter, rect: Rect, icon: Icon, color: Color3
                 pt(7.3, 10.6),
                 pt(4.5, 13.0),
             ]);
-        }
-        Icon::Hand => {
-            for (x, top) in [(5.5, 5.0), (7.7, 3.0), (9.9, 3.5), (12.0, 5.5)] {
-                line(&[pt(x, 9.0), pt(x, top)]);
-                painter.circle_stroke(pt(x, top), 0.01, st);
-            }
-            line(&[pt(5.5, 9.0), pt(5.5, 11.0), pt(3.3, 9.0)]);
-            line(&[pt(12.0, 5.5), pt(12.0, 11.0)]);
-            painter.add(egui::Shape::line(
-                arc(pt(8.75, 11.0), 3.25 * u, 0.0, std::f32::consts::PI, 10),
-                st,
-            ));
-        }
-        Icon::Frame => {
-            line(&[pt(5.0, 2.0), pt(5.0, 14.0)]);
-            line(&[pt(11.0, 2.0), pt(11.0, 14.0)]);
-            line(&[pt(2.0, 5.0), pt(14.0, 5.0)]);
-            line(&[pt(2.0, 11.0), pt(14.0, 11.0)]);
-        }
-        Icon::Rect => {
-            painter.rect_stroke(
-                Rect::from_min_max(pt(2.5, 3.5), pt(13.5, 12.5)),
-                2.0 * u,
-                st,
-                egui::StrokeKind::Middle,
-            );
-        }
-        Icon::Ellipse => {
-            painter.circle_stroke(c, 5.75 * u, st);
-        }
-        Icon::Line => {
-            line(&[pt(3.0, 13.0), pt(13.0, 3.0)]);
-        }
-        Icon::Text => {
-            line(&[pt(3.5, 4.0), pt(3.5, 3.0), pt(12.5, 3.0), pt(12.5, 4.0)]);
-            line(&[pt(8.0, 3.0), pt(8.0, 13.0)]);
-            line(&[pt(6.3, 13.0), pt(9.7, 13.0)]);
         }
         Icon::Pencil => {
             closed(&[
@@ -422,18 +436,6 @@ pub fn paint_icon(painter: &egui::Painter, rect: Rect, icon: Icon, color: Color3
             line(&[pt(5.8, 6.2), pt(10.3, 10.7)]);
             line(&[pt(8.0, 13.0), pt(14.0, 13.0)]);
         }
-        Icon::Ink => {
-            let pts: Vec<Pos2> = (0..=16)
-                .map(|i| {
-                    let t = i as f32 / 16.0;
-                    pt(
-                        2.5 + 11.0 * t,
-                        8.0 - 3.2 * (t * std::f32::consts::TAU).sin(),
-                    )
-                })
-                .collect();
-            line(&pts);
-        }
         Icon::Eye | Icon::EyeSlash => {
             let mut top = arc(pt(8.0, 13.5), 7.5 * u, -2.4, -0.74, 10);
             let bottom = arc(pt(8.0, 2.5), 7.5 * u, 0.74, 2.4, 10);
@@ -443,31 +445,6 @@ pub fn paint_icon(painter: &egui::Painter, rect: Rect, icon: Icon, color: Color3
             if icon == Icon::EyeSlash {
                 line(&[pt(3.0, 3.0), pt(13.0, 13.0)]);
             }
-        }
-        Icon::Lock | Icon::LockOpen => {
-            painter.rect_stroke(
-                Rect::from_min_max(pt(3.5, 7.5), pt(12.5, 14.0)),
-                1.5 * u,
-                st,
-                egui::StrokeKind::Middle,
-            );
-            let (cx, a0) = if icon == Icon::Lock {
-                (8.0, 0.0)
-            } else {
-                (10.5, 0.0)
-            };
-            let mut sh = vec![pt(cx - 2.5, 7.5)];
-            sh.extend(arc(
-                pt(cx, 5.0),
-                2.5 * u,
-                std::f32::consts::PI,
-                std::f32::consts::TAU + a0,
-                10,
-            ));
-            if icon == Icon::Lock {
-                sh.push(pt(cx + 2.5, 7.5));
-            }
-            line(&sh);
         }
         Icon::ChevronRight => {
             line(&[pt(6.0, 3.5), pt(10.5, 8.0), pt(6.0, 12.5)]);
@@ -495,54 +472,6 @@ pub fn paint_icon(painter: &egui::Painter, rect: Rect, icon: Icon, color: Color3
         Icon::Minus => {
             line(&[pt(3.0, 8.0), pt(13.0, 8.0)]);
         }
-        Icon::Sidebar => {
-            painter.rect_stroke(
-                Rect::from_min_max(pt(1.5, 3.0), pt(14.5, 13.0)),
-                2.0 * u,
-                st,
-                egui::StrokeKind::Middle,
-            );
-            line(&[pt(6.0, 3.0), pt(6.0, 13.0)]);
-        }
-        Icon::Group => {
-            let dash = |a: Pos2, b: Pos2| {
-                painter.add(egui::Shape::dashed_line(&[a, b], st, 1.6 * u, 1.4 * u));
-            };
-            dash(pt(2.5, 2.5), pt(13.5, 2.5));
-            dash(pt(13.5, 2.5), pt(13.5, 13.5));
-            dash(pt(13.5, 13.5), pt(2.5, 13.5));
-            dash(pt(2.5, 13.5), pt(2.5, 2.5));
-            painter.rect_stroke(
-                Rect::from_min_max(pt(5.5, 5.5), pt(10.5, 10.5)),
-                1.0 * u,
-                st,
-                egui::StrokeKind::Middle,
-            );
-        }
-        Icon::Pen => {
-            closed(&[
-                pt(8.0, 2.0),
-                pt(12.5, 8.5),
-                pt(10.0, 13.5),
-                pt(6.0, 13.5),
-                pt(3.5, 8.5),
-            ]);
-            line(&[pt(8.0, 2.0), pt(8.0, 8.0)]);
-            painter.circle_stroke(pt(8.0, 9.0), 1.0 * u, st);
-        }
-        Icon::Polygon => {
-            closed(&[pt(8.0, 2.0), pt(14.0, 13.5), pt(2.0, 13.5)]);
-        }
-        Icon::Star => {
-            let pts: Vec<Pos2> = (0..10)
-                .map(|i| {
-                    let a = -std::f32::consts::FRAC_PI_2 + i as f32 * std::f32::consts::PI / 5.0;
-                    let r = if i % 2 == 0 { 6.5 } else { 2.8 };
-                    pt(8.0 + a.cos() * r, 8.5 + a.sin() * r)
-                })
-                .collect();
-            closed(&pts);
-        }
         Icon::Component | Icon::Instance => {
             let d = [
                 [pt(8.0, 1.8), pt(10.2, 4.0), pt(8.0, 6.2), pt(5.8, 4.0)],
@@ -557,22 +486,6 @@ pub fn paint_icon(painter: &egui::Painter, rect: Rect, icon: Icon, color: Color3
             } else {
                 closed(&[pt(8.0, 1.8), pt(14.2, 8.0), pt(8.0, 14.2), pt(1.8, 8.0)]);
             }
-        }
-        Icon::Image => {
-            painter.rect_stroke(
-                Rect::from_min_max(pt(2.0, 3.0), pt(14.0, 13.0)),
-                1.5 * u,
-                st,
-                egui::StrokeKind::Middle,
-            );
-            line(&[
-                pt(2.5, 12.0),
-                pt(6.5, 7.5),
-                pt(9.5, 10.5),
-                pt(11.0, 9.0),
-                pt(13.5, 11.5),
-            ]);
-            painter.circle_stroke(pt(10.5, 5.8), 1.1 * u, st);
         }
         Icon::AlignLeft | Icon::AlignHCenter | Icon::AlignRight => {
             let x = match icon {
@@ -674,23 +587,6 @@ pub fn paint_icon(painter: &egui::Painter, rect: Rect, icon: Icon, color: Color3
             line(&[pt(6.0, 6.0), pt(4.0, 8.0), pt(6.0, 10.0)]);
             line(&[pt(10.0, 6.0), pt(12.0, 8.0), pt(10.0, 10.0)]);
         }
-        Icon::Arrow => {
-            line(&[pt(3.0, 13.0), pt(13.0, 3.0)]);
-            line(&[pt(7.5, 3.0), pt(13.0, 3.0), pt(13.0, 8.5)]);
-        }
-        Icon::Sticky => {
-            closed(&[
-                pt(2.5, 2.5),
-                pt(13.5, 2.5),
-                pt(13.5, 9.5),
-                pt(9.5, 13.5),
-                pt(2.5, 13.5),
-            ]);
-            line(&[pt(13.5, 9.5), pt(9.5, 9.5), pt(9.5, 13.5)]);
-        }
-        Icon::Diamond => {
-            closed(&[pt(8.0, 1.8), pt(14.2, 8.0), pt(8.0, 14.2), pt(1.8, 8.0)]);
-        }
         Icon::Laser => {
             line(&[pt(2.5, 13.5), pt(9.5, 6.5)]);
             painter.circle_filled(pt(11.0, 5.0), 2.2 * u, color);
@@ -700,18 +596,6 @@ pub fn paint_icon(painter: &egui::Painter, rect: Rect, icon: Icon, color: Color3
                     pt(11.0 + dx * 1.35, 5.0 + dy * 1.35),
                 ]);
             }
-        }
-        Icon::Comment => {
-            // Speech bubble with its tail at the bottom left, like a comment pin.
-            let mut pts = arc(
-                pt(8.0, 7.2),
-                5.6 * u,
-                std::f32::consts::PI * 0.75,
-                std::f32::consts::PI * 2.6,
-                18,
-            );
-            pts.push(pt(2.6, 13.6));
-            painter.add(egui::Shape::closed_line(pts, st));
         }
         Icon::Attach => {
             // A paper clip: three parallel strokes joined by round ends, tilted 45°.
@@ -784,21 +668,6 @@ pub fn paint_icon(painter: &egui::Painter, rect: Rect, icon: Icon, color: Color3
             line(&[pt(6.6, 6.5), pt(6.9, 11.8)]);
             line(&[pt(9.4, 6.5), pt(9.1, 11.8)]);
         }
-        Icon::More => {
-            for x in [3.5, 8.0, 12.5] {
-                painter.circle_filled(pt(x, 8.0), 1.1 * u, color);
-            }
-        }
-        Icon::Page => {
-            closed(&[
-                pt(3.5, 1.8),
-                pt(9.5, 1.8),
-                pt(12.5, 4.8),
-                pt(12.5, 14.2),
-                pt(3.5, 14.2),
-            ]);
-            line(&[pt(9.5, 1.8), pt(9.5, 4.8), pt(12.5, 4.8)]);
-        }
         Icon::Restore => {
             let mut a = arc(c, 5.5 * u, -2.6, 2.2, 14);
             a.reverse();
@@ -841,7 +710,7 @@ pub fn icon_button(ui: &mut egui::Ui, icon: Icon, size: f32, selected: bool) -> 
         let p = pal(ui);
         let enabled = ui.is_enabled();
         let fill = if selected {
-            accent()
+            p.primary
         } else if resp.is_pointer_button_down_on() {
             p.pressed
         } else if resp.hovered() && enabled {
@@ -849,9 +718,9 @@ pub fn icon_button(ui: &mut egui::Ui, icon: Icon, size: f32, selected: bool) -> 
         } else {
             Color32::TRANSPARENT
         };
-        ui.painter().rect_filled(rect, 6.0, fill);
+        ui.painter().rect_filled(rect, CONTROL_RADIUS, fill);
         let color = if selected {
-            Color32::WHITE
+            p.primary_text
         } else if !enabled {
             p.tertiary
         } else {
