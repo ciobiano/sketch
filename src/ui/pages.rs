@@ -148,9 +148,11 @@ fn page_row(
         },
     );
     if active {
-        ui.painter().rect_filled(row, 6.0, p.pressed);
+        ui.painter()
+            .rect_filled(row, theme::CONTROL_RADIUS, p.selected);
     } else if resp.hovered() {
-        ui.painter().rect_filled(row, 6.0, p.hover);
+        ui.painter()
+            .rect_filled(row, theme::CONTROL_RADIUS, p.hover);
     }
     // Drop indicator while dragging.
     if let Some((from, to)) = st.pages.drag

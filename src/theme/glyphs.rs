@@ -1,4 +1,4 @@
-//! Hand-drawn workspace glyphs on a common 24-point grid.
+//! Sketch’s editing glyphs and navigation icons from @hugeicons/core-free-icons 4.4.0.
 
 use super::Icon;
 use egui::{Color32, ColorImage, Id, Painter, Rect, TextureHandle, TextureOptions, pos2, vec2};
@@ -10,27 +10,33 @@ macro_rules! glyph {
     };
 }
 
+macro_rules! hugeicon {
+    ($name:literal) => {
+        include_str!(concat!("../../assets/icons/hugeicons/", $name, ".svg"))
+    };
+}
+
 pub(super) fn paint(painter: &Painter, rect: Rect, icon: Icon, color: Color32) -> bool {
     let svg = match icon {
-        Icon::Dashboard => glyph!("dashboard"),
+        Icon::Dashboard => hugeicon!("dashboard"),
         Icon::Page => glyph!("page"),
         Icon::Pen => glyph!("pen"),
         Icon::Text => glyph!("text"),
         Icon::Comment => glyph!("comment"),
-        Icon::Search => glyph!("search"),
-        Icon::Folder => glyph!("folder"),
-        Icon::Play => glyph!("play"),
-        Icon::More => glyph!("more"),
+        Icon::Search => hugeicon!("search"),
+        Icon::Folder => hugeicon!("folder"),
+        Icon::Play => hugeicon!("play"),
+        Icon::More => hugeicon!("more"),
         Icon::Image => glyph!("image"),
         Icon::Lock => glyph!("lock"),
         Icon::LockOpen => glyph!("lock-open"),
-        Icon::Send => glyph!("send"),
+        Icon::Send => hugeicon!("send"),
         Icon::Hand => glyph!("hand"),
         Icon::Frame => glyph!("frame"),
         Icon::Rect => glyph!("rectangle"),
         Icon::Group => glyph!("group"),
-        Icon::Sidebar => glyph!("sidebar"),
-        Icon::SidebarRight => glyph!("sidebar-right"),
+        Icon::Sidebar => hugeicon!("sidebar"),
+        Icon::SidebarRight => hugeicon!("sidebar-right"),
         Icon::Ellipse => glyph!("ellipse"),
         Icon::Line => glyph!("line"),
         Icon::Divider => glyph!("divider"),

@@ -7,6 +7,7 @@ use crate::project::Store;
 use crate::render::frame::{self, Painter};
 use crate::render::gpu::Headless;
 use crate::session::Session;
+#[cfg(target_os = "macos")]
 use crate::theme;
 use crate::ui::home::HomeAction;
 use crate::ui::{self, UiState};
@@ -73,7 +74,6 @@ pub enum Start {
 impl App {
     pub fn new(start: Start, store: Store) -> App {
         let ctx = egui::Context::default();
-        theme::set_accent(theme::system_accent());
         ui::setup_style(&ctx);
         let library = crate::library::Library::load(&crate::library::Library::path_in(&store.root));
         let mut app = App {
@@ -1032,9 +1032,7 @@ impl ApplicationHandler<UserEvent> for App {
                 redraw = true;
             }
             WindowEvent::ThemeChanged(_) => {
-                // Light/dark switch: egui-winit swaps the style; refresh the accent too.
-                theme::set_accent(theme::system_accent());
-                ui::setup_style(&self.ctx);
+                // egui-winit switches the style when the system appearance changes.
                 redraw = true;
             }
             #[cfg(target_os = "macos")]

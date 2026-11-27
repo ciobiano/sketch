@@ -532,9 +532,11 @@ fn layer_row(
     }
     let hovered = ui.rect_contains_pointer(row);
     if selected {
-        ui.painter().rect_filled(row, 6.0, p.pressed);
+        ui.painter()
+            .rect_filled(row, theme::CONTROL_RADIUS, p.selected);
     } else if hovered {
-        ui.painter().rect_filled(row, 6.0, p.hover);
+        ui.painter()
+            .rect_filled(row, theme::CONTROL_RADIUS, p.hover);
     }
     let fg = if selected {
         Color32::WHITE

@@ -1302,32 +1302,24 @@ fn send_button(ui: &mut Ui, ready: bool, docked: bool) -> egui::Response {
     let (r, resp) = ui.allocate_exact_size(vec2(26.0, 26.0), Sense::click());
     resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, ready, "Send"));
     if docked {
-        let fill = if ready {
-            Color32::from_gray(237)
-        } else {
-            p.control
-        };
-        ui.painter().rect_filled(r, 7, fill);
+        let fill = if ready { p.primary } else { p.control };
+        ui.painter().rect_filled(r, theme::CONTROL_RADIUS, fill);
         theme::paint_icon(
             ui.painter(),
             r.shrink(4.0),
             Icon::Send,
-            if ready {
-                Color32::from_gray(12)
-            } else {
-                p.tertiary
-            },
+            if ready { p.primary_text } else { p.tertiary },
         );
         return resp.on_hover_text("Send (Return)");
     }
     let fill = if !ready {
         p.control
     } else if resp.hovered() {
-        theme::blend(theme::accent(), Color32::from_black_alpha(30))
+        theme::blend(p.primary, Color32::from_black_alpha(30))
     } else {
-        theme::accent()
+        p.primary
     };
-    let ink = if ready { Color32::WHITE } else { p.tertiary };
+    let ink = if ready { p.primary_text } else { p.tertiary };
     let c = r.center();
     ui.painter().circle_filled(c, 13.0, fill);
     let s = Stroke::new(1.8, ink);

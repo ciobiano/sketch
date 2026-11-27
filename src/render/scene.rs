@@ -14,9 +14,9 @@ use std::sync::Arc;
 
 pub const CANVAS_BG: Color = Color::rgb(0xee, 0xee, 0xf0);
 pub const GRID_DOT: Color = Color::rgb(0xcf, 0xcf, 0xd6);
-pub const WORKSPACE_BG: Color = Color::rgb(0x04, 0x04, 0x04);
-pub const WORKSPACE_GRID: Color = Color::rgb(0x14, 0x14, 0x14);
-pub const ACCENT: Color = Color::rgb(0x2f, 0x6f, 0xf3);
+pub const WORKSPACE_BG: Color = Color::rgb(0x0a, 0x0a, 0x0a);
+pub const WORKSPACE_GRID: Color = Color::rgb(0x17, 0x17, 0x17);
+pub const ACCENT: Color = Color::rgb(0x2b, 0x7f, 0xff);
 pub const GUIDE: Color = Color::rgb(0xf2, 0x2f, 0x7a);
 
 pub fn rgba(c: Color) -> [f32; 4] {

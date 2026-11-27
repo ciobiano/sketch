@@ -1,5 +1,4 @@
-//! macOS-flavoured look for the egui chrome: Inter font, system accent, light/dark palettes
-//! that follow the system appearance, and thin SF Symbols-style line icons.
+//! Native chrome styled with the Rhea preset, Inter and Sketch’s editing glyphs.
 
 use egui::{
     Color32, CornerRadius, FontData, FontFamily, FontId, Pos2, Rect, Shadow, Stroke, Vec2, pos2,
@@ -8,14 +7,17 @@ use egui::{
 use std::sync::Arc;
 
 mod glyphs;
-use std::sync::atomic::{AtomicU32, Ordering};
 
 pub static INTER_REGULAR: &[u8] = include_bytes!("../assets/fonts/Inter-Regular.ttf");
 pub static INTER_MEDIUM: &[u8] = include_bytes!("../assets/fonts/Inter-Medium.ttf");
 pub static INTER_SEMIBOLD: &[u8] = include_bytes!("../assets/fonts/Inter-SemiBold.ttf");
 
-/// macOS system blue, used when the system accent can't be read.
-pub const MAC_BLUE: Color32 = Color32::from_rgb(0x00, 0x7a, 0xff);
+/// Blue for selection outlines, drag indicators, and links.
+pub const ACCENT: Color32 = Color32::from_rgb(0x2b, 0x7f, 0xff);
+
+/// Rhea uses a 0.45rem base radius, about 7 points at the default size.
+pub const CONTROL_RADIUS: u8 = 7;
+pub const PANEL_RADIUS: u8 = 10;
 
 /// Body text (13pt) and secondary text (11pt), as in AppKit.
 pub const BODY: f32 = 13.0;
@@ -31,47 +33,11 @@ pub const TRAFFIC_LIGHTS: (f64, f64) = (14.0, TOOLBAR_H as f64);
 /// Horizontal room the traffic lights need from the window's left edge.
 pub const TRAFFIC_LIGHTS_W: f32 = 76.0;
 
-static ACCENT: AtomicU32 = AtomicU32::new(u32::from_be_bytes([0x00, 0x7a, 0xff, 0xff]));
-
-pub fn accent() -> Color32 {
-    let [r, g, b, _] = ACCENT.load(Ordering::Relaxed).to_be_bytes();
-    Color32::from_rgb(r, g, b)
+pub const fn accent() -> Color32 {
+    ACCENT
 }
 
-pub fn set_accent(c: Color32) {
-    ACCENT.store(
-        u32::from_be_bytes([c.r(), c.g(), c.b(), 0xff]),
-        Ordering::Relaxed,
-    );
-}
-
-/// The user's accent colour from System Settings › Appearance (falls back to system blue).
-pub fn system_accent() -> Color32 {
-    #[cfg(target_os = "macos")]
-    {
-        // `AppleAccentColor` is absent for the default (blue) and multicolour settings.
-        let out = std::process::Command::new("/usr/bin/defaults")
-            .args(["read", "-g", "AppleAccentColor"])
-            .output();
-        if let Ok(o) = out
-            && o.status.success()
-        {
-            return match String::from_utf8_lossy(&o.stdout).trim() {
-                "-1" => Color32::from_rgb(0x8c, 0x8c, 0x8c),
-                "0" => Color32::from_rgb(0xff, 0x3b, 0x30),
-                "1" => Color32::from_rgb(0xff, 0x95, 0x00),
-                "2" => Color32::from_rgb(0xff, 0xcc, 0x00),
-                "3" => Color32::from_rgb(0x28, 0xcd, 0x41),
-                "5" => Color32::from_rgb(0xaf, 0x52, 0xde),
-                "6" => Color32::from_rgb(0xff, 0x2d, 0x55),
-                _ => MAC_BLUE,
-            };
-        }
-    }
-    MAC_BLUE
-}
-
-/// Colours for one appearance, loosely after AppKit's semantic colours.
+/// Semantic colors from shadcn preset b27I38BE, converted from OKLCH to sRGB.
 #[derive(Clone, Copy)]
 pub struct Palette {
     pub window: Color32,
@@ -81,6 +47,10 @@ pub struct Palette {
     pub control_border: Color32,
     pub field: Color32,
     pub text: Color32,
+    pub primary: Color32,
+    pub primary_text: Color32,
+    pub selected: Color32,
+    pub focus: Color32,
     pub secondary: Color32,
     pub tertiary: Color32,
     pub separator: Color32,
@@ -90,37 +60,49 @@ pub struct Palette {
 }
 
 pub fn palette(dark: bool) -> Palette {
+    let primary_text = Color32::from_rgb(0xef, 0xf6, 0xff);
     if dark {
+        // The 10% white border composited over the sidebar surface.
+        let border = Color32::from_gray(0x2e);
         Palette {
-            window: Color32::from_gray(0x0c),
-            sidebar: Color32::from_gray(0x0c),
-            inspector: Color32::from_gray(0x0c),
-            control: Color32::from_gray(0x17),
-            control_border: Color32::from_gray(0x30),
+            window: Color32::from_gray(0x0a),
+            sidebar: Color32::from_gray(0x17),
+            inspector: Color32::from_gray(0x17),
+            control: Color32::from_rgb(0x27, 0x27, 0x2a),
+            control_border: Color32::from_white_alpha(38),
             field: Color32::from_gray(0x17),
-            text: Color32::from_gray(0xf1),
-            secondary: Color32::from_gray(0xb0),
-            tertiary: Color32::from_gray(0x87),
-            separator: Color32::from_gray(0x2e),
-            hover: Color32::from_white_alpha(16),
+            text: Color32::from_gray(0xfa),
+            primary: Color32::from_rgb(0x19, 0x3c, 0xb8),
+            primary_text,
+            selected: Color32::from_gray(0x26),
+            focus: Color32::from_gray(0x73),
+            secondary: Color32::from_gray(0xa1),
+            tertiary: Color32::from_gray(0x89),
+            separator: border,
+            hover: Color32::from_white_alpha(14),
             pressed: Color32::from_white_alpha(30),
-            popover: Color32::from_gray(0x0e),
+            popover: Color32::from_gray(0x17),
         }
     } else {
+        let border = Color32::from_gray(0xe5);
         Palette {
-            window: Color32::from_rgb(0xf6, 0xf6, 0xf6),
-            sidebar: Color32::from_rgb(0xee, 0xee, 0xf0),
-            inspector: Color32::from_rgb(0xf6, 0xf6, 0xf6),
-            control: Color32::WHITE,
-            control_border: Color32::from_black_alpha(30),
+            window: Color32::WHITE,
+            sidebar: Color32::from_gray(0xfa),
+            inspector: Color32::WHITE,
+            control: Color32::from_rgb(0xf4, 0xf4, 0xf5),
+            control_border: border,
             field: Color32::WHITE,
-            text: Color32::from_rgb(0x1d, 0x1d, 0x1f),
-            secondary: Color32::from_rgb(0x86, 0x86, 0x8b),
-            tertiary: Color32::from_rgb(0xb8, 0xb8, 0xbc),
-            separator: Color32::from_rgb(0xdc, 0xdc, 0xde),
-            hover: Color32::from_black_alpha(12),
-            pressed: Color32::from_black_alpha(24),
-            popover: Color32::from_rgb(0xfc, 0xfc, 0xfc),
+            text: Color32::from_gray(0x0a),
+            primary: Color32::from_rgb(0x14, 0x47, 0xe6),
+            primary_text,
+            selected: Color32::from_gray(0xf5),
+            focus: Color32::from_gray(0xa1),
+            secondary: Color32::from_gray(0x73),
+            tertiary: Color32::from_gray(0x73),
+            separator: border,
+            hover: Color32::from_black_alpha(10),
+            pressed: Color32::from_black_alpha(22),
+            popover: Color32::WHITE,
         }
     }
 }
@@ -188,7 +170,7 @@ pub fn semibold(size: f32) -> FontId {
 fn style_for(s: &mut egui::Style, dark: bool) {
     use egui::TextStyle as T;
     let p = palette(dark);
-    let acc = accent();
+    let acc = if dark { ACCENT } else { p.primary };
     s.visuals = if dark {
         egui::Visuals::dark()
     } else {
@@ -231,8 +213,8 @@ fn style_for(s: &mut egui::Style, dark: bool) {
     v.extreme_bg_color = p.field;
     v.text_edit_bg_color = Some(p.field);
     v.window_stroke = Stroke::new(1.0, p.control_border);
-    v.window_corner_radius = CornerRadius::same(10);
-    v.menu_corner_radius = CornerRadius::same(10);
+    v.window_corner_radius = CornerRadius::same(PANEL_RADIUS);
+    v.menu_corner_radius = CornerRadius::same(PANEL_RADIUS);
     v.window_shadow = Shadow {
         offset: [0, 8],
         blur: 28,
@@ -245,8 +227,8 @@ fn style_for(s: &mut egui::Style, dark: bool) {
         spread: 0,
         color: Color32::from_black_alpha(if dark { 90 } else { 30 }),
     };
-    v.selection.bg_fill = acc;
-    v.selection.stroke = Stroke::new(1.0, Color32::WHITE);
+    v.selection.bg_fill = p.primary;
+    v.selection.stroke = Stroke::new(1.0, p.primary_text);
     v.slider_trailing_fill = true;
     v.handle_shape = egui::style::HandleShape::Circle;
     v.indent_has_left_vline = false;
@@ -254,30 +236,30 @@ fn style_for(s: &mut egui::Style, dark: bool) {
     v.interact_cursor = None;
     v.collapsing_header_frame = false;
 
-    let r6 = CornerRadius::same(6);
+    let control_radius = CornerRadius::same(CONTROL_RADIUS);
     let w = &mut v.widgets;
     w.noninteractive.bg_fill = p.inspector;
     w.noninteractive.weak_bg_fill = p.inspector;
     w.noninteractive.bg_stroke = Stroke::new(1.0, p.separator);
     w.noninteractive.fg_stroke = Stroke::new(1.0, p.text);
-    w.noninteractive.corner_radius = r6;
+    w.noninteractive.corner_radius = control_radius;
     w.inactive.bg_fill = p.control;
     w.inactive.weak_bg_fill = p.control;
     w.inactive.bg_stroke = Stroke::new(1.0, p.control_border);
     w.inactive.fg_stroke = Stroke::new(1.0, p.text);
-    w.inactive.corner_radius = r6;
+    w.inactive.corner_radius = control_radius;
     w.inactive.expansion = 0.0;
     w.hovered.bg_fill = p.control;
     w.hovered.weak_bg_fill = blend(p.control, p.hover);
     w.hovered.bg_stroke = Stroke::new(1.0, p.control_border);
     w.hovered.fg_stroke = Stroke::new(1.0, p.text);
-    w.hovered.corner_radius = r6;
+    w.hovered.corner_radius = control_radius;
     w.hovered.expansion = 0.0;
     w.active.bg_fill = blend(p.control, p.pressed);
     w.active.weak_bg_fill = blend(p.control, p.pressed);
-    w.active.bg_stroke = Stroke::new(1.0, p.control_border);
+    w.active.bg_stroke = Stroke::new(1.0, p.focus);
     w.active.fg_stroke = Stroke::new(1.0, p.text);
-    w.active.corner_radius = r6;
+    w.active.corner_radius = control_radius;
     w.active.expansion = 0.0;
     w.open = w.active;
 }
@@ -728,7 +710,7 @@ pub fn icon_button(ui: &mut egui::Ui, icon: Icon, size: f32, selected: bool) -> 
         let p = pal(ui);
         let enabled = ui.is_enabled();
         let fill = if selected {
-            accent()
+            p.primary
         } else if resp.is_pointer_button_down_on() {
             p.pressed
         } else if resp.hovered() && enabled {
@@ -736,9 +718,9 @@ pub fn icon_button(ui: &mut egui::Ui, icon: Icon, size: f32, selected: bool) -> 
         } else {
             Color32::TRANSPARENT
         };
-        ui.painter().rect_filled(rect, 6.0, fill);
+        ui.painter().rect_filled(rect, CONTROL_RADIUS, fill);
         let color = if selected {
-            Color32::WHITE
+            p.primary_text
         } else if !enabled {
             p.tertiary
         } else {

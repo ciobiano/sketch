@@ -296,8 +296,8 @@ fn top_bar(ui: &mut Ui, ed: &mut Editor, st: &mut UiState, narrow: bool) {
         |ui| {
             if ui
                 .add(
-                    Button::new(title("Export").color(Color32::from_gray(12)))
-                        .fill(Color32::from_gray(237))
+                    Button::new(title("Export").color(p.primary_text))
+                        .fill(p.primary)
                         .stroke(Stroke::NONE)
                         .min_size(vec2(56.0, CONTROL_H)),
                 )
@@ -423,7 +423,7 @@ fn search_field(ui: &mut Ui, query: &mut String, compact: bool) {
     Frame::NONE
         .fill(p.field)
         .stroke(Stroke::new(1.0, p.control_border))
-        .corner_radius(6)
+        .corner_radius(theme::CONTROL_RADIUS)
         .inner_margin(egui::Margin::symmetric(7, 3))
         .show(ui, |ui| {
             ui.horizontal(|ui| {
@@ -501,7 +501,8 @@ fn segments(ui: &mut Ui, key: &str, selected: &mut usize, labels: &[&str], reduc
     };
     let id = ui.id().with(key);
     let time = ui.input(|i| i.time);
-    ui.painter().rect_filled(rect, 8, p.control);
+    ui.painter()
+        .rect_filled(rect, theme::PANEL_RADIUS, p.window);
     let mut motion = ui
         .data(|d| d.get_temp::<TabMotion>(id))
         .filter(|m| !reduced && m.to == *selected);
@@ -528,14 +529,17 @@ fn segments(ui: &mut Ui, key: &str, selected: &mut usize, labels: &[&str], reduc
                 });
         }
         if !touch_active(ui) && resp.hovered() && index != *selected {
-            ui.painter()
-                .rect_filled(cell(index as f32).shrink(1.0), 6, p.hover);
+            ui.painter().rect_filled(
+                cell(index as f32).shrink(1.0),
+                theme::CONTROL_RADIUS,
+                p.hover,
+            );
         }
         if resp.has_focus() {
             ui.painter().rect_stroke(
                 cell(index as f32).shrink(1.0),
-                6,
-                Stroke::new(1.0, p.secondary),
+                theme::CONTROL_RADIUS,
+                Stroke::new(1.0, p.focus),
                 StrokeKind::Outside,
             );
         }
@@ -553,10 +557,10 @@ fn segments(ui: &mut Ui, key: &str, selected: &mut usize, labels: &[&str], reduc
     }
     let active = cell(pos.unwrap_or(*selected as f32)).shrink(1.0);
     ui.painter()
-        .rect_filled(active, 6, theme::blend(p.control, p.pressed));
+        .rect_filled(active, theme::CONTROL_RADIUS, p.selected);
     ui.painter().rect_stroke(
         active,
-        6,
+        theme::CONTROL_RADIUS,
         Stroke::new(1.0, p.control_border),
         StrokeKind::Inside,
     );
@@ -613,28 +617,29 @@ fn icon_control(
         easing::cubic_out,
     );
     let base = if selected {
-        theme::blend(p.control, p.pressed)
+        p.primary
     } else if framed {
         p.control
     } else {
         Color32::TRANSPARENT
     };
-    ui.painter().rect_filled(rect, 6, base);
+    ui.painter().rect_filled(rect, theme::CONTROL_RADIUS, base);
     if !touch_active(ui) && (reply.hovered() || reply.has_focus()) {
-        ui.painter().rect_filled(rect, 6, p.hover);
+        ui.painter()
+            .rect_filled(rect, theme::CONTROL_RADIUS, p.hover);
     }
     if press > 0.0 {
         ui.painter()
-            .rect_filled(rect, 6, p.pressed.gamma_multiply(press));
+            .rect_filled(rect, theme::CONTROL_RADIUS, p.pressed.gamma_multiply(press));
     }
     if framed || reply.has_focus() {
         ui.painter().rect_stroke(
             rect,
-            6,
+            theme::CONTROL_RADIUS,
             Stroke::new(
                 1.0,
                 if reply.has_focus() {
-                    p.secondary
+                    p.focus
                 } else {
                     p.control_border
                 },
@@ -643,7 +648,7 @@ fn icon_control(
         );
     }
     let fg = if selected {
-        p.text
+        p.primary_text
     } else if ui.is_enabled() {
         p.secondary
     } else {
@@ -710,7 +715,7 @@ pub(super) fn toolbar(ctx: &egui::Context, ed: &mut Editor, st: &mut UiState, ca
             Frame::NONE
                 .fill(p.popover)
                 .stroke(Stroke::new(1.0, p.separator))
-                .corner_radius(10)
+                .corner_radius(theme::PANEL_RADIUS)
                 .inner_margin(6)
                 .show(ui, |ui| {
                     ui.horizontal_centered(|ui| {
